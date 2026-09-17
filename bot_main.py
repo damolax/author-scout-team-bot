@@ -423,6 +423,20 @@ async def startup():
 async def root():return {"ok":True,"name":"Author Scout Team Bot","version":"2.0"}
 @app.get("/health")
 async def health():return {"ok":True}
+
+@app.get("/debug/db")
+async def debug_db():
+    raw=os.getenv("DATABASE_URL","")
+    try:
+        p=urlparse(raw if raw else "sqlite:///./scoutbot.db")
+        return {
+            "configured": bool(raw),
+            "scheme": p.scheme or "sqlite",
+            "host": p.hostname or "",
+            "database": (p.path or "").lstrip("/") or "scoutbot.db"
+        }
+    except Exception:
+        return {"configured": bool(raw), "scheme": "unknown", "host": "", "database": ""}
 @app.post("/telegram/webhook")
 async def webhook(request:Request,x_telegram_bot_api_secret_token:str|None=Header(default=None)):
     if x_telegram_bot_api_secret_token!=WEBHOOK_SECRET:raise HTTPException(403)
