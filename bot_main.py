@@ -413,6 +413,12 @@ async def handle(up):
 
 @app.on_event("startup")
 async def startup():
+    raw_db=os.getenv("DATABASE_URL","")
+    try:
+        p=urlparse(raw_db if raw_db else "sqlite:///./scoutbot.db")
+        print(f"DB_DIAGNOSTIC configured={bool(raw_db)} scheme={p.scheme or 'sqlite'} host={p.hostname or ''} database={(p.path or '').lstrip('/') or 'scoutbot.db'}")
+    except Exception:
+        print(f"DB_DIAGNOSTIC configured={bool(raw_db)} scheme=unknown host= database=")
     init_db()
     if TOKEN and BASE and WEBHOOK_SECRET:
         try:
