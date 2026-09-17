@@ -35,7 +35,10 @@ elif DB.startswith("postgresql://"): DB="postgresql+psycopg://"+DB[len("postgres
 
 engine=create_engine(DB,pool_pre_ping=True,future=True)
 serializer=URLSafeTimedSerializer(APP_SECRET,salt="author-scout")
-fernet=Fernet(ENC_KEY.encode()) if ENC_KEY else None
+try:
+    fernet=Fernet(ENC_KEY.encode()) if ENC_KEY else None
+except Exception:
+    fernet=None
 TG=f"https://api.telegram.org/bot{TOKEN}"
 TGFILE=f"https://api.telegram.org/file/bot{TOKEN}"
 EMAIL_RE=re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",re.I)
