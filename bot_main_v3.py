@@ -649,6 +649,44 @@ async def show_index_status(chat: int):
         f"Indexed source pages: <b>{sources}</b>\\nActive search-demand patterns: <b>{demands}</b>")
 
 
+
+def _author_candidate_quality(name: str, hint_url: str="", snippet: str="") -> bool:
+    n=re.sub(r"\s+"," ",(name or "").strip())
+    low=n.lower()
+    if not (2 <= len(n.split()) <= 5): return False
+    generic={
+        "tech tips","contact us","about us","our team","board members","editorial team",
+        "staff directory","book reviews","latest news","home page","privacy policy",
+        "terms conditions","customer service","support team","press office","media contact"
+    }
+    if low in generic:return False
+    if any(x in low for x in ["tips","news","blog","directory","support","contact","office","team","board","library"]):
+        return False
+    # A plausible personal name should be mostly alphabetic name-like tokens.
+    toks=re.findall(r"[A-Za-zÀ-ÿ'’-]+",n)
+    if len(toks)!=len(n.split()): return False
+    if sum(bool(re.match(r"^[A-ZÀ-Ý]",t)) for t in toks) < max(1,len(toks)-1):
+        return False
+    h=legacy.host(hint_url)
+    if h and any(x in h for x in ["oppl.org","medium.com","substack.com","wordpress.com"]) and not legacy.official(hint_url,n):
+        # These can be valid sources, but should not be treated as official author identity evidence by themselves.
+        return False
+    return True
+
+def _email_matches_author_or_site(email: str, name: str, website: str) -> bool:
+    email=(email or "").lower().strip()
+    if not email:return False
+    local,_,domain=email.partition("@")
+    if not domain:return False
+    website_domain=legacy.host(website)
+    if website_domain and domain==website_domain:
+        # Still reject obviously generic organizational inboxes.
+        if local in {"board","info","hello","contact","admin","office","support","sales","press","media","team","library"}:
+            return False
+        return True
+    name_tokens=[re.sub(r"[^a-z]","",x.lower()) for x in (name or "").split() if len(x)>2]
+    return any(tok and tok in re.sub(r"[^a-z0-9]","",local) for tok in name_tokens)
+
 # ---------------------------------------------------------------------------
 # Faster author research
 # ---------------------------------------------------------------------------
@@ -658,6 +696,9 @@ _legacy_research = legacy.research
 
 async def _contact_research(name: str, country: str = "", genre: str = "", hint: str = ""):
     """Fast qualification pass: identity route + website + public contact only."""
+    if not _author_candidate_quality(name,hint,""):
+        return {"name":name,"country":country,"genre":genre,"website":"","email":"","email_source_url":"",
+                "verification_status":"rejected_identity","bio":"","books":"","recent_activity":"","source_urls":[]}
     key = "contact:" + re.sub(r"[^a-z0-9]+", "", f"{name}|{country}|{genre}|{hint}".lower())[:220]
     cached = await asyncio.to_thread(_cache_get, key)
     if cached:
@@ -682,7 +723,9 @@ async def _contact_research(name: str, country: str = "", genre: str = "", hint:
             bio = re.sub(r"\s+", " ", sdoc.get_text(" ")).strip()[:700]
             em = legacy.emails(raw)
             if em:
-                emailv, source, verified = em[0], final, "verified_public"
+                chosen=next((x for x in em if _email_matches_author_or_site(x,name,final)),"")
+                if chosen:
+                    emailv, source, verified = chosen, final, "verified_public"
             else:
                 contact_urls = []
                 for a in sdoc.find_all("a", href=True):
@@ -703,8 +746,10 @@ async def _contact_research(name: str, country: str = "", genre: str = "", hint:
                             sources.append(ff)
                         em = legacy.emails(rr)
                         if em:
-                            emailv, source, verified = em[0], ff, "verified_public"
-                            break
+                            chosen=next((x for x in em if _email_matches_author_or_site(x,name,final)),"")
+                            if chosen:
+                                emailv, source, verified = chosen, ff, "verified_public"
+                                break
     result = {
         "name": name, "country": country, "genre": genre, "website": website,
         "email": emailv, "email_source_url": source, "verification_status": verified,
@@ -862,7 +907,7 @@ async def fast_find_authors(spec, progress=None):
         raw_results+=len(rs)
         for r in rs:
             n=legacy.cand(r.get("title",""),r.get("snippet",""))
-            if not n:continue
+            if not n or not _author_candidate_quality(n,r.get("url") or "",r.get("snippet") or ""):continue
             if name_filter:
                 wanted=[x.lower() for x in re.findall(r"[A-Za-zÀ-ÿ'’-]+",name_filter)]
                 if wanted and not all(x in n.lower() for x in wanted):continue
