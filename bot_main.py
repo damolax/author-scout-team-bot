@@ -76,7 +76,8 @@ def init_db():
       f"CREATE TABLE IF NOT EXISTS gmail_accounts(id {pk},telegram_user_id BIGINT NOT NULL,google_subject TEXT NOT NULL,email TEXT NOT NULL,refresh_token_enc TEXT NOT NULL,test_opt_in INTEGER NOT NULL DEFAULT 0,test_scope TEXT NOT NULL DEFAULT 'team',connected_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(telegram_user_id,google_subject))",
       f"CREATE TABLE IF NOT EXISTS delivery_tests(id {pk},team_id INTEGER NOT NULL,requested_by_user_id BIGINT NOT NULL,message_id INTEGER NOT NULL,sender_gmail_id INTEGER NOT NULL,sender_email TEXT NOT NULL,requested_count INTEGER NOT NULL DEFAULT 10,sent_count INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'sending',created_at TEXT NOT NULL,completed_at TEXT DEFAULT '')",
       f"CREATE TABLE IF NOT EXISTS delivery_test_recipients(id {pk},test_id INTEGER NOT NULL,gmail_account_id INTEGER NOT NULL,owner_user_id BIGINT NOT NULL,email TEXT NOT NULL,result TEXT NOT NULL DEFAULT 'pending',sent_at TEXT NOT NULL,responded_at TEXT DEFAULT '',UNIQUE(test_id,gmail_account_id))",
-      f"CREATE TABLE IF NOT EXISTS search_runs(id {pk},team_id INTEGER NOT NULL,telegram_user_id BIGINT NOT NULL,request_text TEXT DEFAULT '',parsed_spec TEXT DEFAULT '{{}}',search_routes TEXT DEFAULT '[]',raw_results INTEGER DEFAULT 0,candidates INTEGER DEFAULT 0,checked INTEGER DEFAULT 0,accepted INTEGER DEFAULT 0,duplicates INTEGER DEFAULT 0,created_at TEXT NOT NULL)"
+      f"CREATE TABLE IF NOT EXISTS search_runs(id {pk},team_id INTEGER NOT NULL,telegram_user_id BIGINT NOT NULL,request_text TEXT DEFAULT '',parsed_spec TEXT DEFAULT '{{}}',search_routes TEXT DEFAULT '[]',raw_results INTEGER DEFAULT 0,candidates INTEGER DEFAULT 0,checked INTEGER DEFAULT 0,accepted INTEGER DEFAULT 0,duplicates INTEGER DEFAULT 0,created_at TEXT NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS user_states(telegram_user_id BIGINT PRIMARY KEY,state TEXT NOT NULL DEFAULT '',payload TEXT DEFAULT '{}',updated_at TEXT NOT NULL)"
     ]
     with engine.begin() as c:
         for s in stmts: c.execute(text(s))
@@ -104,6 +105,20 @@ def ensure_user(u):
 
 def team(uid):
     return row("SELECT t.* FROM users u JOIN teams t ON t.id=u.team_id WHERE u.telegram_user_id=:u",u=uid)
+
+def get_user_state(uid):
+    return row("SELECT * FROM user_states WHERE telegram_user_id=:u",u=uid)
+
+def set_user_state(uid,state,payload=None):
+    t=iso(); p=json.dumps(payload or {})
+    execq("""INSERT INTO user_states(telegram_user_id,state,payload,updated_at)
+        VALUES(:u,:s,:p,:d)
+        ON CONFLICT(telegram_user_id) DO UPDATE SET state=:s,payload=:p,updated_at=:d""",
+        u=uid,s=state,p=p,d=t)
+
+def clear_user_state(uid):
+    execq("DELETE FROM user_states WHERE telegram_user_id=:u",u=uid)
+
 
 def invite():
     alphabet="ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -266,7 +281,6 @@ def parse_find(a):
         "require_website":True,"raw":raw
     }
     if not raw:
-        spec["query"]="authors"
         return spec
 
     # Explicit key=value or key:value filters can appear in any order.
@@ -994,7 +1008,16 @@ The same prospect is blocked globally from being claimed twice."""
 async def handle(up):
     if up.get("callback_query"):
         cb=up["callback_query"];uid=ensure_user(cb["from"]);chat=cb["message"]["chat"]["id"];await tg("answerCallbackQuery",{"callback_query_id":cb["id"]});d=cb.get("data","");t=team(uid)
-        if d=="menu:scout":return await send(chat,"Type what you want naturally, for example:\n<code>Karim in Saudi Arabia</code>\n<code>10 fantasy authors in Canada with public email</code>\nOr use explicit filters with /find.")
+        if d=="menu:scout":
+            set_user_state(uid,"awaiting_find_query")
+            return await send(chat,
+                "🔎 <b>What authors do you want me to scout?</b>\n\n"
+                "Send the search request first. I will not search until you do.\n\n"
+                "Examples:\n"
+                "• <code>10 emerging fantasy authors in Canada with public email</code>\n"
+                "• <code>25 Spanish male authors active in 2026 with website and email</code>\n"
+                "• <code>UAE authors writing literary fiction, low saturation</code>\n\n"
+                "Use /cancel to stop.")
         if d=="menu:export":return await export_chatgpt(chat,uid)
         if d=="menu:upload":return await send(chat,"📤 Upload the XLSX that ChatGPT returned. I will match authors by AS- ID first and import the selected subject + final first message.")
         if d=="menu:queue":return await queue(chat,uid)
@@ -1046,11 +1069,17 @@ async def handle(up):
     if m.get("document"):return await import_sheet(chat,uid,m["document"])
     txt=(m.get("text") or "").strip();parts=txt.split(maxsplit=1);cmd=parts[0].split("@")[0].lower() if txt.startswith("/") else "";arg=parts[1] if len(parts)>1 else ""
     if not cmd and txt:
-        natural=re.match(r"(?i)^(?:find|search|scout)\\s+(.+)$",txt)
-        if natural:
-            cmd="/find";arg=natural.group(1).strip()
-        elif t:
+        state=get_user_state(uid)
+        if state and state.get("state")=="awaiting_find_query":
             cmd="/find";arg=txt
+            clear_user_state(uid)
+        else:
+            natural=re.match(r"(?i)^(?:find|search|scout)\\s+(.+)$",txt)
+            if natural:
+                cmd="/find";arg=natural.group(1).strip()
+    if cmd=="/cancel":
+        clear_user_state(uid)
+        return await send(chat,"✅ Cancelled. No search was started.",main_menu())
     if cmd=="/howto":return await send(chat,HOWTO,main_menu())
     if cmd in {"/start","/help","/menu"}:
         return await send(chat,HELP,main_menu())
@@ -1071,7 +1100,22 @@ async def handle(up):
     if cmd=="/find":
         t=team(uid)
         if not t:return await send(chat,"Join/create a team first.")
+        if not arg.strip():
+            set_user_state(uid,"awaiting_find_query")
+            return await send(chat,
+                "🔎 <b>What authors do you want me to scout?</b>\n\n"
+                "I will wait for your search query before doing any research.\n\n"
+                "Be as specific as you want, for example:\n"
+                "<code>10 emerging fantasy authors in Canada with verified public email and website</code>\n\n"
+                "Use /cancel to stop.")
+        clear_user_state(uid)
         spec=parse_find(arg)
+        if not any([(spec.get("query") or "").strip(),(spec.get("name") or "").strip(),
+                    (spec.get("country") or "").strip(),(spec.get("genre") or "").strip(),
+                    (spec.get("language") or "").strip()]):
+            set_user_state(uid,"awaiting_find_query")
+            return await send(chat,"Please give me a specific author search query first. No search has been started.")
+
         status=await send(
             chat,
             f"🚀 <b>Scout started</b>\n"
