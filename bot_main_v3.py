@@ -380,6 +380,274 @@ async def fast_fetch(u: str):
 legacy.search = fast_search
 legacy.fetch = fast_fetch
 
+
+# ---------------------------------------------------------------------------
+# Persistent source index + author candidate reservoir
+# ---------------------------------------------------------------------------
+
+def _norm_author_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+def _pool_key(name: str, country: str = "") -> str:
+    return f"{_norm_author_name(name)}|{re.sub(r'[^a-z0-9]+','',(country or '').lower())}"
+
+def _demand_key(spec: dict) -> str:
+    parts = [spec.get("country",""), spec.get("genre",""), spec.get("query",""),
+             spec.get("name",""), spec.get("language",""), spec.get("gender","any")]
+    return "|".join(re.sub(r"\s+"," ",str(x or "").strip().lower()) for x in parts)[:700]
+
+def _record_search_demand(spec: dict) -> None:
+    key = _demand_key(spec)
+    t = legacy.iso()
+    country = _COUNTRY_ALIASES.get((spec.get("country") or "").strip().lower(), spec.get("country") or "")
+    try:
+        legacy.execq("""INSERT INTO author_search_demands(
+            demand_key,country,genre,query_text,name_filter,language,gender,request_count,desired_count,last_requested_at,created_at,updated_at
+        ) VALUES(:k,:c,:g,:q,:n,:l,:sex,1,:d,:t,:t,:t)
+        ON CONFLICT(demand_key) DO UPDATE SET
+            request_count=author_search_demands.request_count+1,
+            desired_count=:d,last_requested_at=:t,updated_at=:t""",
+            k=key,c=country,g=spec.get("genre",""),q=spec.get("query",""),n=spec.get("name",""),
+            l=spec.get("language",""),sex=spec.get("gender","any"),d=max(1,int(spec.get("count") or 10)),t=t)
+    except Exception as e:
+        print(f"SOURCE_DEMAND_ERROR {type(e).__name__}: {e}")
+
+def _source_type(title: str, snippet: str, url: str) -> str:
+    s = f"{title} {snippet} {url}".lower()
+    if "writers association" in s or "writers union" in s or "author association" in s:
+        return "writers_association"
+    if "literature centre" in s or "literature center" in s or "literary centre" in s or "literary center" in s:
+        return "literature_center"
+    if "literary agency" in s or "agency authors" in s:
+        return "literary_agency"
+    if "publisher" in s or "publishing house" in s:
+        return "publisher"
+    if "festival" in s or "book fair" in s:
+        return "festival"
+    if "directory" in s or "members" in s or "authors" in s or "writers" in s:
+        return "directory"
+    return "web_source"
+
+def _looks_like_index_source(result: dict) -> bool:
+    u=(result.get("url") or "").lower()
+    s=f"{result.get('title','')} {result.get('snippet','')} {u}".lower()
+    if any(x in legacy.host(u) for x in ["amazon.","goodreads.","wikipedia.","facebook.","instagram.","linkedin."]):
+        return False
+    return any(x in s for x in ["authors","writers","directory","members","literature","literary","publisher","agency","festival"])
+
+def _register_source(result: dict, country: str, query: str) -> None:
+    url=(result.get("url") or "").strip()
+    if not url:return
+    key=url.lower().rstrip("/")[:900]
+    t=legacy.iso()
+    try:
+        legacy.execq("""INSERT INTO author_source_registry(
+            source_key,source_url,domain,country,source_type,discovery_query,status,last_crawled_at,next_crawl_at,
+            discovered_count,error_count,last_error,created_at,updated_at
+        ) VALUES(:k,:u,:h,:c,:s,:q,'active','','',0,0,'',:t,:t)
+        ON CONFLICT(source_key) DO UPDATE SET country=:c,source_type=:s,discovery_query=:q,status='active',updated_at=:t""",
+            k=key,u=url,h=legacy.host(url),c=country,s=_source_type(result.get("title",""),result.get("snippet",""),url),q=query,t=t)
+    except Exception:
+        pass
+
+def _upsert_pool_candidate(name: str, country: str, genre: str="", discovery_url: str="", source_url: str="",
+                           source_type: str="", discovery_query: str="", snippet: str="") -> int:
+    name=re.sub(r"\s+"," ",(name or "").strip(" -|:,.;"))
+    if not name or len(name)<4 or len(name)>100 or not (2 <= len(name.split()) <= 6):
+        return 0
+    k=_pool_key(name,country)
+    if not k.split("|")[0]:return 0
+    t=legacy.iso()
+    try:
+        legacy.execq("""INSERT INTO author_candidate_pool(
+            candidate_key,name,country,genre,discovery_url,source_url,source_domain,source_type,discovery_query,snippet,
+            status,times_selected,verified_payload,verification_status,last_verified_at,discovered_at,last_seen_at,updated_at
+        ) VALUES(:k,:n,:c,:g,:du,:su,:sd,:st,:q,:sn,'discovered',0,'{}','','',:t,:t,:t)
+        ON CONFLICT(candidate_key) DO UPDATE SET
+            discovery_url=CASE WHEN :du<>'' THEN :du ELSE author_candidate_pool.discovery_url END,
+            source_url=CASE WHEN :su<>'' THEN :su ELSE author_candidate_pool.source_url END,
+            source_domain=CASE WHEN :sd<>'' THEN :sd ELSE author_candidate_pool.source_domain END,
+            source_type=CASE WHEN :st<>'' THEN :st ELSE author_candidate_pool.source_type END,
+            discovery_query=CASE WHEN :q<>'' THEN :q ELSE author_candidate_pool.discovery_query END,
+            snippet=CASE WHEN :sn<>'' THEN :sn ELSE author_candidate_pool.snippet END,
+            genre=CASE WHEN author_candidate_pool.genre='' AND :g<>'' THEN :g ELSE author_candidate_pool.genre END,
+            last_seen_at=:t,updated_at=:t""",
+            k=k,n=name,c=country or "",g=genre or "",du=discovery_url or "",su=source_url or discovery_url or "",
+            sd=legacy.host(source_url or discovery_url or ""),st=source_type or "",q=discovery_query or "",
+            sn=(snippet or "")[:1200],t=t)
+        r=legacy.row("SELECT id FROM author_candidate_pool WHERE candidate_key=:k",k=k)
+        return int(r["id"]) if r else 0
+    except Exception as e:
+        print(f"POOL_UPSERT_ERROR {type(e).__name__}: {e}")
+        return 0
+
+def _pool_candidates(spec: dict, limit: int=100) -> list[dict]:
+    country=_COUNTRY_ALIASES.get((spec.get("country") or "").strip().lower(),spec.get("country") or "")
+    if country:
+        rs=legacy.rows("""SELECT * FROM author_candidate_pool
+            WHERE lower(country)=lower(:c) AND status IN ('verified','discovered')
+            ORDER BY CASE WHEN status='verified' THEN 0 ELSE 1 END,times_selected ASC,last_seen_at DESC LIMIT :n""",
+            c=country,n=max(limit*4,200))
+    else:
+        rs=legacy.rows("""SELECT * FROM author_candidate_pool
+            WHERE status IN ('verified','discovered')
+            ORDER BY CASE WHEN status='verified' THEN 0 ELSE 1 END,times_selected ASC,last_seen_at DESC LIMIT :n""",
+            n=max(limit*4,300))
+    name_filter=(spec.get("name") or "").lower().strip()
+    genre=(spec.get("genre") or "").lower().strip()
+    qtokens=[x for x in _tokens((spec.get("query") or "").lower(),8) if x not in {"author","authors","writer","writers","book","books"}]
+    scored=[]
+    for r in rs:
+        if name_filter and name_filter not in (r.get("name") or "").lower():continue
+        blob=" ".join([r.get("name") or "",r.get("genre") or "",r.get("snippet") or "",r.get("discovery_query") or "",r.get("source_type") or ""]).lower()
+        overlap=sum(1 for x in qtokens if x in blob)
+        if genre and genre not in blob and r.get("genre"):continue
+        score=(100 if r.get("status")=="verified" else 0)+overlap*12
+        scored.append((score,r))
+    scored.sort(key=lambda x:(-x[0],int(x[1].get("times_selected") or 0)))
+    return [r for _,r in scored[:limit]]
+
+def _mark_pool_verified(pool_id: int, payload: dict, passed: bool) -> None:
+    if not pool_id:return
+    legacy.execq("""UPDATE author_candidate_pool SET status=:s,verified_payload=:p,
+        verification_status=:v,last_verified_at=:t,updated_at=:t WHERE id=:i""",
+        s="verified" if passed else "rejected",p=json.dumps(payload,ensure_ascii=False),
+        v=payload.get("verification_status",""),t=legacy.iso(),i=pool_id)
+
+def _extract_index_names(raw: str, page_url: str) -> list[tuple[str,str]]:
+    if not raw:return []
+    soup=legacy.BeautifulSoup(raw,"html.parser")
+    out=[];seen=set()
+    bad={"read more","learn more","contact us","about us","our authors","our writers","members","home","books","news",
+         "privacy policy","terms of use","view profile","view all","more information","click here"}
+    nodes=list(soup.find_all(["h2","h3","h4"]))
+    nodes += [a for a in soup.find_all("a",href=True) if any(x in (a.get("href") or "").lower()
+              for x in ["/author","/writer","/member","/people","/profile","/hofund","/contributor"])]
+    for node in nodes[:500]:
+        txt=re.sub(r"\s+"," ",node.get_text(" ",strip=True)).strip(" -|:,.;")
+        if txt.lower() in bad or len(txt)<5 or len(txt)>80:continue
+        words=txt.split()
+        if not (2<=len(words)<=5):continue
+        if sum(bool(re.search(r"[A-Za-zÀ-ÿ]",w)) for w in words)!=len(words):continue
+        if sum(bool(re.match(r"^[A-ZÀ-Ý]",w)) for w in words)<max(1,len(words)-1):continue
+        k=_norm_author_name(txt)
+        if not k or k in seen:continue
+        seen.add(k)
+        href=legacy.urljoin(page_url,node.get("href","")) if getattr(node,"name","")=="a" else ""
+        out.append((txt,href))
+        if len(out)>=120:break
+    return out
+
+async def _index_source_page(source: dict, demand: dict) -> int:
+    try:
+        raw,final=await fast_fetch(source.get("source_url") or "")
+        names=await asyncio.to_thread(_extract_index_names,raw,final)
+        added=0
+        for name,href in names:
+            if _upsert_pool_candidate(name,demand.get("country") or "",demand.get("genre") or "",href or final,final,
+                                      source.get("source_type") or "directory",demand.get("query_text") or "",""):
+                added+=1
+        legacy.execq("""UPDATE author_source_registry SET last_crawled_at=:t,next_crawl_at=:n,
+            discovered_count=discovered_count+:a,last_error='',status='active',updated_at=:t WHERE id=:i""",
+            t=legacy.iso(),n=legacy.iso(legacy.now()+timedelta(hours=12)),a=added,i=source["id"])
+        return added
+    except Exception as e:
+        legacy.execq("""UPDATE author_source_registry SET error_count=error_count+1,last_error=:e,
+            last_crawled_at=:t,next_crawl_at=:n,updated_at=:t WHERE id=:i""",
+            e=f"{type(e).__name__}: {e}"[:500],t=legacy.iso(),n=legacy.iso(legacy.now()+timedelta(hours=2)),i=source["id"])
+        return 0
+
+async def _index_demand(demand: dict) -> dict:
+    country=demand.get("country") or ""
+    genre=demand.get("genre") or ""
+    qtext=demand.get("query_text") or ""
+    name_filter=demand.get("name_filter") or ""
+    base=" ".join(x for x in [country,genre,qtext,name_filter] if x).strip() or "authors"
+    routes=[f'{base} authors directory writers association',f'{base} literature center writers members',
+            f'{base} literary agency publisher authors']
+    sets=await asyncio.gather(*(fast_search(q,15) for q in routes),return_exceptions=True)
+    direct=0
+    for query,rs in zip(routes,sets):
+        if isinstance(rs,Exception):continue
+        for r in rs:
+            n=legacy.cand(r.get("title",""),r.get("snippet",""))
+            if n and _upsert_pool_candidate(n,country,genre,r.get("url") or "",r.get("url") or "","search_result",query,r.get("snippet") or ""):
+                direct+=1
+            if _looks_like_index_source(r):_register_source(r,country,query)
+    sources=legacy.rows("""SELECT * FROM author_source_registry WHERE status='active'
+        AND (:c='' OR lower(country)=lower(:c)) AND (next_crawl_at='' OR next_crawl_at<=:now)
+        ORDER BY CASE WHEN last_crawled_at='' THEN 0 ELSE 1 END,last_crawled_at ASC LIMIT :n""",
+        c=country,now=legacy.iso(),n=SOURCE_INDEX_SOURCE_PAGES_PER_DEMAND)
+    crawled=0
+    if sources:
+        vals=await asyncio.gather(*(_index_source_page(s,demand) for s in sources),return_exceptions=True)
+        crawled=sum(v for v in vals if isinstance(v,int))
+    return {"direct":direct,"crawled":crawled}
+
+async def _preverify_pool(demand: dict, limit: int=SOURCE_INDEX_PREVERIFY_PER_CYCLE) -> int:
+    spec={"country":demand.get("country") or "","genre":demand.get("genre") or "",
+          "query":demand.get("query_text") or "","name":demand.get("name_filter") or ""}
+    pool=await asyncio.to_thread(_pool_candidates,spec,limit*3)
+    existing=await asyncio.to_thread(legacy.rows,"SELECT name,country FROM prospects")
+    existing_keys={_pool_key(r.get("name") or "",r.get("country") or "") for r in existing}
+    candidates=[p for p in pool if p.get("status")=="discovered" and p.get("candidate_key") not in existing_keys][:limit]
+    sem=asyncio.Semaphore(SOURCE_INDEX_CONCURRENCY)
+    async def one(p):
+        async with sem:
+            d=await _contact_research(p["name"],p.get("country") or "",p.get("genre") or "",p.get("discovery_url") or "")
+            passed=bool(d.get("website") and d.get("email"))
+            if passed:d=await _enrich_activity(d)
+            await asyncio.to_thread(_mark_pool_verified,int(p["id"]),d,passed)
+            return int(passed)
+    if not candidates:return 0
+    results=await asyncio.gather(*(one(p) for p in candidates),return_exceptions=True)
+    return sum(v for v in results if isinstance(v,int))
+
+def _seed_default_demands() -> None:
+    if legacy.row("SELECT demand_key FROM author_search_demands LIMIT 1"):return
+    for country in SOURCE_INDEX_DEFAULT_COUNTRIES:
+        _record_search_demand({"country":country,"genre":"","query":"authors","name":"","language":"","gender":"any","count":10})
+
+async def source_index_worker():
+    await asyncio.sleep(8)
+    if not SOURCE_INDEX_ENABLED:
+        print("SOURCE_INDEX_WORKER enabled=False")
+        return
+    await asyncio.to_thread(_seed_default_demands)
+    while True:
+        try:
+            demands=legacy.rows("""SELECT * FROM author_search_demands
+                ORDER BY last_requested_at DESC,request_count DESC LIMIT :n""",n=SOURCE_INDEX_DEMANDS_PER_CYCLE)
+            for d in demands:
+                try:
+                    current=legacy.row("""SELECT COUNT(*) c FROM author_candidate_pool
+                        WHERE status IN ('verified','discovered') AND (:c='' OR lower(country)=lower(:c))""",c=d.get("country") or "")
+                    if int((current or {"c":0})["c"]) < SOURCE_INDEX_POOL_TARGET:
+                        await _index_demand(d)
+                    await _preverify_pool(d,SOURCE_INDEX_PREVERIFY_PER_CYCLE)
+                except Exception as e:
+                    print(f"SOURCE_INDEX_DEMAND_ERROR {type(e).__name__}: {e}")
+            await asyncio.sleep(SOURCE_INDEX_INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"SOURCE_INDEX_WORKER_ERROR {type(e).__name__}: {e}")
+            await asyncio.sleep(SOURCE_INDEX_INTERVAL)
+
+async def show_index_status(chat: int):
+    total=int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool") or {"c":0})["c"])
+    verified=int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool WHERE status='verified'") or {"c":0})["c"])
+    discovered=int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool WHERE status='discovered'") or {"c":0})["c"])
+    rejected=int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool WHERE status='rejected'") or {"c":0})["c"])
+    sources=int((legacy.row("SELECT COUNT(*) c FROM author_source_registry") or {"c":0})["c"])
+    demands=int((legacy.row("SELECT COUNT(*) c FROM author_search_demands") or {"c":0})["c"])
+    return await legacy.send(chat,
+        f"<b>⚡ Author Source Index</b>\\nBackground indexing: <b>{'ON' if SOURCE_INDEX_ENABLED else 'OFF'}</b>\\n"
+        f"Candidate reservoir: <b>{total}</b>\\nPre-verified ready identities: <b>{verified}</b>\\n"
+        f"Awaiting verification: <b>{discovered}</b>\\nRejected by verification: <b>{rejected}</b>\\n"
+        f"Indexed source pages: <b>{sources}</b>\\nActive search-demand patterns: <b>{demands}</b>")
+
+
 # ---------------------------------------------------------------------------
 # Faster author research
 # ---------------------------------------------------------------------------
