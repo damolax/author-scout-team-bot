@@ -126,6 +126,15 @@ async def send(chat,msg,kb=None):
     d={"chat_id":str(chat),"text":msg,"parse_mode":"HTML","disable_web_page_preview":"true"}
     if kb: d["reply_markup"]=json.dumps(kb)
     return await tg("sendMessage",d)
+
+async def edit_msg(chat,message_id,msg,kb=None):
+    d={"chat_id":str(chat),"message_id":str(message_id),"text":msg,"parse_mode":"HTML","disable_web_page_preview":"true"}
+    if kb: d["reply_markup"]=json.dumps(kb)
+    try:
+        return await tg("editMessageText",d)
+    except Exception:
+        return None
+
 async def send_doc(chat,path,cap=""):
     with open(path,"rb") as f: return await tg("sendDocument",{"chat_id":str(chat),"caption":cap},{"document":(Path(path).name,f)})
 
@@ -135,7 +144,9 @@ def ddgs(q,n=10):
         with DDGS(timeout=max(5,int(TIMEOUT))) as d:
             for x in d.text(q,max_results=n,safesearch="moderate"):
                 out.append({"title":x.get("title",""),"url":x.get("href") or x.get("url",""),"snippet":x.get("body") or x.get("snippet","")})
-    except: pass
+    except Exception as e:
+        print(f"SEARCH_ERROR {type(e).__name__}: {e}")
+    print(f"SEARCH_RESULT count={len(out)} query={q[:140]}")
     return out
 async def search(q,n=10): return await asyncio.to_thread(ddgs,q,n)
 
@@ -194,20 +205,43 @@ async def research(name,country="",genre="",hint=""):
     if act and act[0]["url"]:sources.append(act[0]["url"])
     return {"name":name,"country":country,"genre":genre,"website":website,"email":emailv,"email_source_url":source,"verification_status":verified,"bio":bio,"books":"","recent_activity":activity,"source_urls":list(dict.fromkeys(sources))}
 
-async def find_authors(country,genre,gender,count,require_email):
-    extra=(f' "{genre}"' if genre else "")+(" male" if gender=="male" else " female" if gender=="female" else "")
-    seen=set(); cands=[]
-    for q in [f'"{country}" author{extra} official website books',f'"{country}" writer{extra} contact author',f'"{country}" author{extra} {YEAR} new book']:
-        for r in await search(q,max(12,count)):
+async def find_authors(country,genre,gender,count,require_email,progress=None):
+    country_term={"uae":"United Arab Emirates","uk":"United Kingdom","usa":"United States","us":"United States"}.get((country or "").strip().lower(),country)
+    genre_term=f" {genre}" if genre else ""
+    gender_term=f" {gender} author" if gender in {"male","female"} else ""
+    queries=[
+        f'{country_term}{genre_term} author official website contact',
+        f'{country_term}{genre_term} writer novelist books contact',
+        f'{country_term}{genre_term}{gender_term} author {YEAR} book'
+    ]
+    seen=set(); cands=[]; raw_results=0
+    for qi,q in enumerate(queries,1):
+        if progress:
+            await progress(f"🔎 <b>Search pass {qi}/3</b>\nLooking across public web results for {esc(country)} authors…\n\nCandidates collected: <b>{len(cands)}</b>")
+        rs=await search(q,max(15,count*2))
+        raw_results+=len(rs)
+        print(f"FIND_PROGRESS pass={qi} raw_results={len(rs)} candidates_before={len(cands)}")
+        for r in rs:
             n=cand(r["title"],r["snippet"]); k=re.sub("[^a-z0-9]","",n.lower())
-            if n and k not in seen:seen.add(k);cands.append((n,r["url"]))
-    out=[]
-    for n,h in cands[:max(count*4,20)]:
+            if n and k not in seen:
+                seen.add(k);cands.append((n,r["url"]))
+    if progress:
+        await progress(f"📋 <b>{len(cands)} candidate names found</b>\nNow checking official websites and public professional emails…\n\nRaw search results checked: <b>{raw_results}</b>")
+    out=[]; checked=0; with_email=0
+    max_check=min(len(cands),max(count*4,20))
+    for n,h in cands[:max_check]:
+        checked+=1
+        if progress and (checked==1 or checked%2==0):
+            await progress(f"🔬 <b>Verification in progress</b>\nCandidate {checked}/{max_check}: {esc(n)}\nVerified matches so far: <b>{len(out)}</b>\nPublic emails found: <b>{with_email}</b>")
         d=await research(n,country,genre,h)
-        if require_email and not d["email"]:continue
+        if d.get("email"): with_email+=1
+        if require_email and not d["email"]:
+            continue
         out.append(d)
-        if len(out)>=count:break
-    return out
+        if len(out)>=count:
+            break
+    print(f"FIND_DONE raw_results={raw_results} candidates={len(cands)} checked={checked} with_email={with_email} accepted={len(out)}")
+    return out,{"raw_results":raw_results,"candidates":len(cands),"checked":checked,"with_email":with_email}
 
 def parse_find(a):
     p=[x.strip() for x in a.split("|")]; n=10
@@ -381,11 +415,42 @@ async def handle(up):
     if cmd=="/find":
         t=team(uid)
         if not t:return await send(chat,"Join/create a team first.")
-        n,c,g,gender,req=parse_find(arg);await send(chat,f"🔎 Scouting up to {n} new authors in {esc(c)}…");found=await find_authors(c,g,gender,max(n*2,n),req);new=dup=0
-        for d in found:
-            _,created,_=claim(uid,t["id"],d);new+=int(created);dup+=int(not created)
+        n,country_name,g,gender,req=parse_find(arg)
+        status=await send(chat,f"🚀 <b>Scout started</b>\nTarget: {n} new authors\nCountry: {esc(country_name)}\nGenre: {esc(g or 'any')}\nEmail required: {'yes' if req else 'no'}")
+        status_id=status.get("message_id") if isinstance(status,dict) else None
+        async def progress(message):
+            if status_id:
+                await edit_msg(chat,status_id,message)
+            else:
+                await send(chat,message)
+        found,meta=await find_authors(country_name,g,gender,max(n*2,n+3),req,progress)
+        new=dup=0
+        if not found:
+            return await progress(
+                f"⚠️ <b>Scout finished with no verified matches</b>\n"
+                f"Raw search results: <b>{meta['raw_results']}</b>\n"
+                f"Candidate names: <b>{meta['candidates']}</b>\n"
+                f"Candidates checked: <b>{meta['checked']}</b>\n"
+                f"Public emails found: <b>{meta['with_email']}</b>\n\n"
+                f"No prospects were saved. This tells us exactly which stage needs adjustment."
+            )
+        for idx,d in enumerate(found,1):
+            _,created,_=claim(uid,t["id"],d)
+            new+=int(created);dup+=int(not created)
+            await progress(
+                f"💾 <b>Saving verified authors</b>\n"
+                f"Processed: {idx}/{len(found)}\n"
+                f"New claimed: <b>{new}</b> / {n}\n"
+                f"Duplicates blocked: <b>{dup}</b>"
+            )
             if new>=n:break
-        return await send(chat,f"✅ New claimed: <b>{new}</b>\nDuplicates blocked: <b>{dup}</b>")
+        return await progress(
+            f"✅ <b>Scout complete</b>\n"
+            f"New claimed: <b>{new}</b>\n"
+            f"Duplicates blocked: <b>{dup}</b>\n"
+            f"Candidates checked: <b>{meta['checked']}</b>\n"
+            f"Public emails found: <b>{meta['with_email']}</b>"
+        )
     if cmd=="/research":
         t=team(uid)
         if not t:return await send(chat,"Join/create a team first.")
