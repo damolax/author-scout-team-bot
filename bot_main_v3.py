@@ -404,11 +404,11 @@ def _record_search_demand(spec: dict) -> None:
     try:
         legacy.execq("""INSERT INTO author_search_demands(
             demand_key,country,genre,query_text,name_filter,language,gender,request_count,desired_count,last_requested_at,created_at,updated_at
-        ) VALUES(:k,:c,:g,:q,:n,:l,:sex,1,:d,:t,:t,:t)
+        ) VALUES(:k,:c,:g,:search_text,:n,:l,:sex,1,:d,:t,:t,:t)
         ON CONFLICT(demand_key) DO UPDATE SET
             request_count=author_search_demands.request_count+1,
             desired_count=:d,last_requested_at=:t,updated_at=:t""",
-            k=key,c=country,g=spec.get("genre",""),q=spec.get("query",""),n=spec.get("name",""),
+            k=key,c=country,g=spec.get("genre",""),search_text=spec.get("query",""),n=spec.get("name",""),
             l=spec.get("language",""),sex=spec.get("gender","any"),d=max(1,int(spec.get("count") or 10)),t=t)
     except Exception as e:
         print(f"SOURCE_DEMAND_ERROR {type(e).__name__}: {e}")
@@ -445,9 +445,9 @@ def _register_source(result: dict, country: str, query: str) -> None:
         legacy.execq("""INSERT INTO author_source_registry(
             source_key,source_url,domain,country,source_type,discovery_query,status,last_crawled_at,next_crawl_at,
             discovered_count,error_count,last_error,created_at,updated_at
-        ) VALUES(:k,:u,:h,:c,:s,:q,'active','','',0,0,'',:t,:t)
-        ON CONFLICT(source_key) DO UPDATE SET country=:c,source_type=:s,discovery_query=:q,status='active',updated_at=:t""",
-            k=key,u=url,h=legacy.host(url),c=country,s=_source_type(result.get("title",""),result.get("snippet",""),url),q=query,t=t)
+        ) VALUES(:k,:u,:h,:c,:s,:discovery_text,'active','','',0,0,'',:t,:t)
+        ON CONFLICT(source_key) DO UPDATE SET country=:c,source_type=:s,discovery_query=:discovery_text,status='active',updated_at=:t""",
+            k=key,u=url,h=legacy.host(url),c=country,s=_source_type(result.get("title",""),result.get("snippet",""),url),discovery_text=query,t=t)
     except Exception:
         pass
 
@@ -463,18 +463,18 @@ def _upsert_pool_candidate(name: str, country: str, genre: str="", discovery_url
         legacy.execq("""INSERT INTO author_candidate_pool(
             candidate_key,name,country,genre,discovery_url,source_url,source_domain,source_type,discovery_query,snippet,
             status,times_selected,verified_payload,verification_status,last_verified_at,discovered_at,last_seen_at,updated_at
-        ) VALUES(:k,:n,:c,:g,:du,:su,:sd,:st,:q,:sn,'discovered',0,'{}','','',:t,:t,:t)
+        ) VALUES(:k,:n,:c,:g,:du,:su,:sd,:st,:discovery_text,:sn,'discovered',0,'{}','','',:t,:t,:t)
         ON CONFLICT(candidate_key) DO UPDATE SET
             discovery_url=CASE WHEN :du<>'' THEN :du ELSE author_candidate_pool.discovery_url END,
             source_url=CASE WHEN :su<>'' THEN :su ELSE author_candidate_pool.source_url END,
             source_domain=CASE WHEN :sd<>'' THEN :sd ELSE author_candidate_pool.source_domain END,
             source_type=CASE WHEN :st<>'' THEN :st ELSE author_candidate_pool.source_type END,
-            discovery_query=CASE WHEN :q<>'' THEN :q ELSE author_candidate_pool.discovery_query END,
+            discovery_query=CASE WHEN :discovery_text<>'' THEN :discovery_text ELSE author_candidate_pool.discovery_query END,
             snippet=CASE WHEN :sn<>'' THEN :sn ELSE author_candidate_pool.snippet END,
             genre=CASE WHEN author_candidate_pool.genre='' AND :g<>'' THEN :g ELSE author_candidate_pool.genre END,
             last_seen_at=:t,updated_at=:t""",
             k=k,n=name,c=country or "",g=genre or "",du=discovery_url or "",su=source_url or discovery_url or "",
-            sd=legacy.host(source_url or discovery_url or ""),st=source_type or "",q=discovery_query or "",
+            sd=legacy.host(source_url or discovery_url or ""),st=source_type or "",discovery_text=discovery_query or "",
             sn=(snippet or "")[:1200],t=t)
         r=legacy.row("SELECT id FROM author_candidate_pool WHERE candidate_key=:k",k=k)
         return int(r["id"]) if r else 0
@@ -1090,9 +1090,9 @@ def _get_or_create_profile(candidate: dict, score: int, reason: str, evidence: s
     if ex:
         legacy.execq(
             """UPDATE connection_profiles SET profile_url=:pu,name=:n,headline=:h,company=:co,location=:l,country=:c,
-               snippet=:s,source_query=:q,fit_score=:fs,fit_reason=:fr,fit_evidence=:fe,last_verified_at=:t WHERE id=:i""",
+               snippet=:s,source_query=:source_query,fit_score=:fs,fit_reason=:fr,fit_evidence=:fe,last_verified_at=:t WHERE id=:i""",
             pu=candidate["profile_url"], n=candidate["name"], h=candidate["headline"], co=candidate["company"],
-            l=candidate["location"], c=candidate["country"], s=candidate["snippet"], q=candidate["source_query"],
+            l=candidate["location"], c=candidate["country"], s=candidate["snippet"], source_query=candidate["source_query"],
             fs=score, fr=reason, fe=evidence, t=t, i=ex["id"],
         )
         return int(ex["id"])
@@ -1312,14 +1312,14 @@ async def setup_connections(chat: int, uid: int, arg: str):
     excluded = json.dumps(CONN_EXCLUDED_COUNTRIES)
     ex = legacy.row("SELECT telegram_user_id FROM connection_preferences WHERE telegram_user_id=:u", u=uid)
     if ex:
-        legacy.execq("""UPDATE connection_preferences SET team_id=:tid,linkedin_profile_url=:p,profile_context=:c,target_query=:q,
+        legacy.execq("""UPDATE connection_preferences SET team_id=:tid,linkedin_profile_url=:p,profile_context=:c,target_query=:target_query,
             target_countries=:tc,excluded_countries=:ec,min_score=:ms,ready_target=:rt,enabled=1,updated_at=:d WHERE telegram_user_id=:u""",
-            tid=tm["id"], p=profile_url, c=context, q=focus, tc=countries, ec=excluded, ms=CONN_MIN_SCORE, rt=CONN_READY_TARGET, d=t, u=uid)
+            tid=tm["id"], p=profile_url, c=context, target_query=focus, tc=countries, ec=excluded, ms=CONN_MIN_SCORE, rt=CONN_READY_TARGET, d=t, u=uid)
     else:
         legacy.execq("""INSERT INTO connection_preferences(telegram_user_id,team_id,linkedin_profile_url,profile_context,target_query,
             target_countries,excluded_countries,min_score,ready_target,enabled,last_refill_at,last_error,created_at,updated_at)
-            VALUES(:u,:tid,:p,:c,:q,:tc,:ec,:ms,:rt,1,'','',:d,:d)""",
-            u=uid, tid=tm["id"], p=profile_url, c=context, q=focus, tc=countries, ec=excluded, ms=CONN_MIN_SCORE, rt=CONN_READY_TARGET, d=t)
+            VALUES(:u,:tid,:p,:c,:target_query,:tc,:ec,:ms,:rt,1,'','',:d,:d)""",
+            u=uid, tid=tm["id"], p=profile_url, c=context, target_query=focus, tc=countries, ec=excluded, ms=CONN_MIN_SCORE, rt=CONN_READY_TARGET, d=t)
     asyncio.create_task(replenish_user(uid))
     return await legacy.send(chat,
         f"✅ <b>Connection Intelligence enabled</b>\n"
@@ -1354,8 +1354,8 @@ async def update_connection_prefs(chat: int, uid: int, arg: str):
     if "query" in vals:
         query = vals["query"]
     legacy.execq("""UPDATE connection_preferences SET target_countries=:tc,excluded_countries=:ec,min_score=:m,
-        ready_target=:r,target_query=:q,updated_at=:d WHERE telegram_user_id=:u""",
-        tc=json.dumps(countries), ec=json.dumps(excluded), m=min_score, r=target, q=query, d=legacy.iso(), u=uid)
+        ready_target=:r,target_query=:target_query,updated_at=:d WHERE telegram_user_id=:u""",
+        tc=json.dumps(countries), ec=json.dumps(excluded), m=min_score, r=target, target_query=query, d=legacy.iso(), u=uid)
     asyncio.create_task(replenish_user(uid))
     return await legacy.send(chat, "✅ Connection preferences updated. Background research will use the new criteria.")
 
