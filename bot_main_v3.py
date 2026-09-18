@@ -456,6 +456,9 @@ def _upsert_pool_candidate(name: str, country: str, genre: str="", discovery_url
     name=re.sub(r"\s+"," ",(name or "").strip(" -|:,.;"))
     if not name or len(name)<4 or len(name)>100 or not (2 <= len(name.split()) <= 6):
         return 0
+    # Never store obvious junk or high-saturation authors in the active scouting reservoir.
+    if "_author_candidate_quality" in globals() and not _author_candidate_quality(name,discovery_url,snippet):
+        return 0
     k=_pool_key(name,country)
     if not k.split("|")[0]:return 0
     t=legacy.iso()
@@ -849,7 +852,9 @@ async def fast_find_authors(spec, progress=None):
     pool=[p for p in pool
           if p.get("candidate_key") not in existing_keys
           and _norm_author_name(p.get("name") or "") not in existing_names
-          and _author_candidate_quality(p.get("name") or "",p.get("discovery_url") or "",p.get("snippet") or "")]
+          and _author_candidate_quality(p.get("name") or "",p.get("discovery_url") or "",p.get("snippet") or "")
+          and "authors authors directory" not in (p.get("discovery_query") or "").lower()
+          and "authors literary agency publisher authors" not in (p.get("discovery_query") or "").lower()]
 
     out=[];checked=0;with_email=0;with_website=0;raw_results=0;reservoir_hits=0
     accepted_names=set();queries_used=["NEON_AUTHOR_RESERVOIR"]
