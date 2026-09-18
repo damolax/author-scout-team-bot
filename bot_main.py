@@ -152,12 +152,18 @@ async def tg(method,data=None,files=None):
         r=await c.post(f"{TG}/{method}",data=data,files=files); r.raise_for_status(); j=r.json()
         if not j.get("ok"): raise RuntimeError(j)
         return j.get("result")
+def _telegram_text(msg):
+    s=str(msg or "")
+    return s.replace("\\n","\n")
+
 async def send(chat,msg,kb=None):
+    msg=_telegram_text(msg)
     d={"chat_id":str(chat),"text":msg,"parse_mode":"HTML","disable_web_page_preview":"true"}
     if kb: d["reply_markup"]=json.dumps(kb)
     return await tg("sendMessage",d)
 
 async def edit_msg(chat,message_id,msg,kb=None):
+    msg=_telegram_text(msg)
     d={"chat_id":str(chat),"message_id":str(message_id),"text":msg,"parse_mode":"HTML","disable_web_page_preview":"true"}
     if kb: d["reply_markup"]=json.dumps(kb)
     try:
@@ -1243,3 +1249,15 @@ async def compose(t:str):
     if not m:raise HTTPException(404)
     params={"view":"cm","fs":"1","to":m["recipient"],"su":m["subject"],"body":m["body"]}
     return RedirectResponse("https://mail.google.com/mail/?"+urlencode(params))
+
+
+# AUTHOR_SCOUT_V3_BRIDGE
+# Keeps older Render start commands working. When bot_main is the entrypoint,
+# load the v3 overlay after all legacy definitions are available.
+if __name__ != "bot_main_v3":
+    try:
+        import bot_main_v3 as _author_scout_v3
+        app = _author_scout_v3.app
+        print("AUTHOR_SCOUT_V3_BRIDGE loaded=True version=" + str(getattr(app, "version", "")))
+    except Exception as _v3_error:
+        print(f"AUTHOR_SCOUT_V3_BRIDGE loaded=False error={type(_v3_error).__name__}: {_v3_error}")
