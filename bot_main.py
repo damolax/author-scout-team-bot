@@ -14,6 +14,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from itsdangerous import URLSafeTimedSerializer
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 from sqlalchemy import create_engine, text
 
 TOKEN=os.getenv("TELEGRAM_BOT_TOKEN","")
@@ -73,10 +75,26 @@ def init_db():
       f"CREATE TABLE IF NOT EXISTS scout_events(id {pk},telegram_user_id BIGINT NOT NULL,team_id INTEGER NOT NULL,prospect_id INTEGER NOT NULL,created_at TEXT NOT NULL)",
       f"CREATE TABLE IF NOT EXISTS gmail_accounts(id {pk},telegram_user_id BIGINT NOT NULL,google_subject TEXT NOT NULL,email TEXT NOT NULL,refresh_token_enc TEXT NOT NULL,test_opt_in INTEGER NOT NULL DEFAULT 0,test_scope TEXT NOT NULL DEFAULT 'team',connected_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(telegram_user_id,google_subject))",
       f"CREATE TABLE IF NOT EXISTS delivery_tests(id {pk},team_id INTEGER NOT NULL,requested_by_user_id BIGINT NOT NULL,message_id INTEGER NOT NULL,sender_gmail_id INTEGER NOT NULL,sender_email TEXT NOT NULL,requested_count INTEGER NOT NULL DEFAULT 10,sent_count INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'sending',created_at TEXT NOT NULL,completed_at TEXT DEFAULT '')",
-      f"CREATE TABLE IF NOT EXISTS delivery_test_recipients(id {pk},test_id INTEGER NOT NULL,gmail_account_id INTEGER NOT NULL,owner_user_id BIGINT NOT NULL,email TEXT NOT NULL,result TEXT NOT NULL DEFAULT 'pending',sent_at TEXT NOT NULL,responded_at TEXT DEFAULT '',UNIQUE(test_id,gmail_account_id))"
+      f"CREATE TABLE IF NOT EXISTS delivery_test_recipients(id {pk},test_id INTEGER NOT NULL,gmail_account_id INTEGER NOT NULL,owner_user_id BIGINT NOT NULL,email TEXT NOT NULL,result TEXT NOT NULL DEFAULT 'pending',sent_at TEXT NOT NULL,responded_at TEXT DEFAULT '',UNIQUE(test_id,gmail_account_id))",
+      f"CREATE TABLE IF NOT EXISTS search_runs(id {pk},team_id INTEGER NOT NULL,telegram_user_id BIGINT NOT NULL,request_text TEXT DEFAULT '',parsed_spec TEXT DEFAULT '{}',search_routes TEXT DEFAULT '[]',raw_results INTEGER DEFAULT 0,candidates INTEGER DEFAULT 0,checked INTEGER DEFAULT 0,accepted INTEGER DEFAULT 0,duplicates INTEGER DEFAULT 0,created_at TEXT NOT NULL)"
     ]
     with engine.begin() as c:
         for s in stmts: c.execute(text(s))
+    # Backward-compatible columns for existing databases.
+    for alter in [
+        "ALTER TABLE messages ADD COLUMN recipient_email TEXT DEFAULT ''",
+        "ALTER TABLE messages ADD COLUMN body_english TEXT DEFAULT ''",
+        "ALTER TABLE messages ADD COLUMN reply_status TEXT DEFAULT ''",
+        "ALTER TABLE messages ADD COLUMN replied_at TEXT DEFAULT ''",
+        "ALTER TABLE messages ADD COLUMN reply_notes TEXT DEFAULT ''",
+        "ALTER TABLE messages ADD COLUMN sent_via TEXT DEFAULT ''",
+        "ALTER TABLE messages ADD COLUMN auto_sent INTEGER DEFAULT 0"
+    ]:
+        try:
+            with engine.begin() as c:
+                c.execute(text(alter))
+        except Exception:
+            pass
 
 def ensure_user(u):
     uid=int(u["id"]); ex=row("SELECT telegram_user_id FROM users WHERE telegram_user_id=:u",u=uid)
@@ -104,9 +122,18 @@ def pkey(d):
     return "name:"+re.sub("[^a-z0-9]","",(d.get("name") or "").lower())+":"+re.sub("[^a-z0-9]","",(d.get("country") or "").lower())
 
 def claim(uid,tid,d):
-    k=pkey(d); ex=row("SELECT * FROM prospects WHERE normalized_key=:k",k=k)
-    if ex: return ex["id"],False,ex
-    vals={"k":k,"n":d.get("name",""),"c":d.get("country",""),"g":d.get("genre",""),"w":d.get("website",""),"e":(d.get("email") or "").lower(),"es":d.get("email_source_url",""),"v":d.get("verification_status","unverified"),"b":d.get("bio",""),"bk":d.get("books",""),"a":d.get("recent_activity",""),"s":json.dumps(d.get("source_urls",[])),"tid":tid,"uid":uid,"t":iso()}
+    k=pkey(d)
+    email=(d.get("email") or "").lower().strip()
+    website=(d.get("website") or "").strip().lower().rstrip("/")
+    name=(d.get("name") or "").strip()
+    country=(d.get("country") or "").strip()
+    ex=row("""SELECT * FROM prospects WHERE normalized_key=:k
+        OR (:e<>'' AND lower(email)=:e)
+        OR (:w<>'' AND lower(rtrim(website,'/'))=:w)
+        OR (:n<>'' AND :c<>'' AND lower(name)=lower(:n) AND lower(country)=lower(:c))
+        LIMIT 1""",k=k,e=email,w=website,n=name,c=country)
+    if ex:return ex["id"],False,ex
+    vals={"k":k,"n":name,"c":country,"g":d.get("genre",""),"w":d.get("website",""),"e":email,"es":d.get("email_source_url",""),"v":d.get("verification_status","unverified"),"b":d.get("bio",""),"bk":d.get("books",""),"a":d.get("recent_activity",""),"s":json.dumps(d.get("source_urls",[])),"tid":tid,"uid":uid,"t":iso()}
     try:
         with engine.begin() as c:
             r=c.execute(text("INSERT INTO prospects(normalized_key,name,country,genre,website,email,email_source_url,verification_status,bio,books,recent_activity,source_urls,claimed_team_id,claimed_by_user_id,claimed_at,updated_at) VALUES(:k,:n,:c,:g,:w,:e,:es,:v,:b,:bk,:a,:s,:tid,:uid,:t,:t) RETURNING id"),vals)
@@ -114,7 +141,10 @@ def claim(uid,tid,d):
             c.execute(text("INSERT INTO scout_events(telegram_user_id,team_id,prospect_id,created_at) VALUES(:uid,:tid,:pid,:t)"),{"uid":uid,"tid":tid,"pid":pid,"t":vals["t"]})
         return pid,True,None
     except Exception:
-        ex=row("SELECT * FROM prospects WHERE normalized_key=:k",k=k)
+        ex=row("""SELECT * FROM prospects WHERE normalized_key=:k
+          OR (:e<>'' AND lower(email)=:e)
+          OR (:w<>'' AND lower(rtrim(website,'/'))=:w)
+          LIMIT 1""",k=k,e=email,w=website)
         return (ex["id"],False,ex) if ex else (0,False,None)
 
 async def tg(method,data=None,files=None):
@@ -397,7 +427,7 @@ async def find_authors(spec,progress=None):
     print(f"FIND_DONE raw_results={raw_results} candidates={len(cands)} checked={checked} websites={with_website} with_email={with_email} accepted={len(out)} query={base[:180]}")
     return out,{
         "raw_results":raw_results,"candidates":len(cands),"checked":checked,
-        "with_email":with_email,"with_website":with_website,"query":base
+        "with_email":with_email,"with_website":with_website,"query":base,"queries":queries
     }
 
 def enc(v):
@@ -416,6 +446,234 @@ async def gmail_send(account,to,subject,body):
     async with httpx.AsyncClient(timeout=30) as c:
         r=await c.post(GMAIL_SEND,headers={"Authorization":f"Bearer {token}"},json={"raw":raw});r.raise_for_status();return r.json()
 
+
+def norm_header(v):
+    return re.sub(r"[^a-z0-9]+"," ",str(v or "").lower()).strip()
+
+def prompt_text():
+    p=Path(__file__).with_name("AUTHOR_RESEARCH_PROMPT_V3_2.txt")
+    try:return p.read_text(encoding="utf-8")
+    except:return "Use the supplied author rows as research seeds. Verify every important fact, preserve Source Row ID and Canonical Author ID, and return an XLSX with Selected Subject and Best First Message — Author Language."
+
+def style_sheet(ws, widths=None):
+    fill=PatternFill("solid",fgColor="1F4E78")
+    for cell in ws[1]:
+        cell.font=Font(bold=True,color="FFFFFF")
+        cell.fill=fill
+        cell.alignment=Alignment(horizontal="center",vertical="center",wrap_text=True)
+    ws.freeze_panes="A2"
+    ws.auto_filter.ref=ws.dimensions
+    ws.sheet_view.showGridLines=False
+    if widths:
+        for col,w in widths.items():ws.column_dimensions[col].width=w
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:cell.alignment=Alignment(vertical="top",wrap_text=True)
+
+async def export_chatgpt(chat,uid):
+    t=team(uid)
+    if not t:return await send(chat,"Join/create a team first.")
+    ps=rows("SELECT * FROM prospects WHERE claimed_team_id=:t ORDER BY id",t=t["id"])
+    if not ps:return await send(chat,"No authors to export yet. Scout authors first.")
+    wb=Workbook(); ws=wb.active; ws.title="Authors & Messages"
+    seed_headers=[
+        "Source Row ID","Canonical Author ID","Author Name — Bot","Country — Bot","Genre — Bot",
+        "Official Website — Bot","Public Professional Email — Bot","Email Source URL — Bot",
+        "Email Verification Status — Bot","Bio / Research Seed — Bot","Books — Bot",
+        "Recent Activity — Bot","Source URLs — Bot","Claimed At — Bot"
+    ]
+    enriched=[
+        "Processing Status","Duplicate Of","Author Name — Verified","Country — Verified",
+        "Primary Language","Genre","Official Website","Public Professional Email","Contact Type",
+        "Email Source URL","Identity Confidence","Current Project","Current Project Stage",
+        "Recent Activity / Current Moment","Why Now","Publisher","Literary Agent / Representation",
+        "Foreign Rights Handler","Translation Status","Audio Status","Film / TV / Stage Status",
+        "Publicity / Marketing Handler","Already-Solved Summary","Critical Unknowns",
+        "Top Opportunity #1","Opportunity #1 Score","Opportunity #1 Evidence",
+        "Top Opportunity #2","Opportunity #2 Score","Opportunity #2 Evidence",
+        "Top Opportunity #3","Opportunity #3 Score","Opportunity #3 Evidence",
+        "Top Opportunity #4","Opportunity #4 Score","Opportunity #4 Evidence",
+        "Top Opportunity #5","Opportunity #5 Score","Opportunity #5 Evidence",
+        "Primary Pivotal Unknown","Winning Pivotal Question","Message Current Anchor",
+        "Message Distinctive Detail","Message Public-Information Boundary",
+        "Subject Option 1","Subject Option 2","Subject Option 3","Selected Subject",
+        "Best First Message — Author Language","Best First Message — English",
+        "Expected Response Path 1","Expected Response Path 2","Expected Response Path 3",
+        "Next Conversation State","Research Confidence","Research Notes",
+        "Primary Source URL","Additional Source URLs","Research Date"
+    ]
+    ws.append(seed_headers+enriched)
+    for p in ps:
+        try:srcs=" | ".join(json.loads(p.get("source_urls") or "[]"))
+        except:srcs=p.get("source_urls") or ""
+        ws.append([
+            f"AS-{p['id']}",f"AS-{p['id']}",p["name"],p["country"],p["genre"],p["website"],p["email"],
+            p["email_source_url"],p["verification_status"],p["bio"],p["books"],p["recent_activity"],srcs,p["claimed_at"]
+        ]+[""]*len(enriched))
+    style_sheet(ws)
+    for i,h in enumerate(seed_headers+enriched,1):
+        letter=get_column_letter(i)
+        ws.column_dimensions[letter].width=18
+        if any(x in h.lower() for x in ["message","notes","evidence","activity","unknown","source urls","summary","bio"]):
+            ws.column_dimensions[letter].width=38
+        if "url" in h.lower() or "website" in h.lower():ws.column_dimensions[letter].width=32
+
+    ins=wb.create_sheet("HOW TO USE")
+    ins_rows=[
+        ["AUTHOR SCOUT → CHATGPT → TELEGRAM WORKFLOW"],
+        ["1","Upload this entire XLSX to ChatGPT. Do not copy authors one by one."],
+        ["2","Tell ChatGPT: Read the 'ChatGPT Prompt' sheet and process every row in 'Authors & Messages' using that prompt."],
+        ["3","ChatGPT must preserve Source Row ID, Canonical Author ID, and every original Bot column."],
+        ["4","ChatGPT should independently verify important facts. Bot data is a research seed, not final proof."],
+        ["5","ChatGPT should return a NEW XLSX using the columns already present in 'Authors & Messages' and may add the supporting Top Five Opportunities, Sources, and Run Log sheets required by the prompt."],
+        ["6","For rows ready for outreach, the returned workbook should contain: Processing Status, Public Professional Email, Selected Subject, Best First Message — Author Language, and Best First Message — English."],
+        ["7","Upload ChatGPT's returned XLSX directly back to this Telegram bot. The bot matches rows by Canonical Author ID / Source Row ID first, then email/name as fallback."],
+        ["8","Use /queue for manual sending. Gmail-connected users can use the automatic send button."],
+        ["9","Use /campaign or /stats for total authors, ready messages, sent messages and replies."],
+        ["IMPORTANT","Do not remove or change AS- IDs. They allow the bot to match researched rows even if ChatGPT corrects the author's name or email."]
+    ]
+    for r in ins_rows:ins.append(r)
+    ins["A1"].font=Font(bold=True,size=16,color="FFFFFF");ins["A1"].fill=PatternFill("solid",fgColor="1F4E78")
+    ins.column_dimensions["A"].width=18;ins.column_dimensions["B"].width=110
+    for row in ins.iter_rows():
+        for cell in row:cell.alignment=Alignment(vertical="top",wrap_text=True)
+
+    prs=wb.create_sheet("ChatGPT Prompt")
+    prs.append(["Master Author Research & Messaging System v3.2"])
+    prs["A1"].font=Font(bold=True,size=14,color="FFFFFF");prs["A1"].fill=PatternFill("solid",fgColor="1F4E78")
+    for line in prompt_text().splitlines():prs.append([line])
+    prs.column_dimensions["A"].width=120
+    for row in prs.iter_rows():
+        row[0].alignment=Alignment(vertical="top",wrap_text=True)
+
+    tmp=tempfile.NamedTemporaryFile(suffix=".xlsx",delete=False);tmp.close()
+    wb.save(tmp.name)
+    try:await send_doc(chat,tmp.name,f"📥 {len(ps)} authors ready for ChatGPT research. Upload this same workbook to ChatGPT, then upload ChatGPT's returned XLSX back here.")
+    finally:
+        try:os.unlink(tmp.name)
+        except:pass
+
+async def send_brief(chat,uid):
+    t=team(uid)
+    if not t:return await send(chat,"Join/create a team first.")
+    txt=(
+        "AUTHOR SCOUT WORKFLOW\\n\\n"
+        "1. Scout authors in Telegram.\\n"
+        "2. Use /export to download the ChatGPT-ready XLSX.\\n"
+        "3. Upload that XLSX to ChatGPT and instruct it to follow the embedded 'ChatGPT Prompt' sheet.\\n"
+        "4. ChatGPT deep-researches each author, preserves AS- IDs, selects the best subject and first message, and returns an XLSX.\\n"
+        "5. Upload the returned XLSX directly to this bot.\\n"
+        "6. Use /queue to send manually, or connect Gmail for automatic sending.\\n"
+        "7. Use /campaign to track total authors, ready, sent and replied.\\n\\n"
+        "Required return fields for ready messages: Canonical Author ID or Source Row ID, Public Professional Email, Selected Subject, Best First Message — Author Language."
+    )
+    fd=tempfile.NamedTemporaryFile(mode="w",suffix=".txt",delete=False,encoding="utf-8")
+    fd.write(txt);fd.close()
+    try:await send_doc(chat,fd.name,"Author Scout workflow brief")
+    finally:
+        try:os.unlink(fd.name)
+        except:pass
+
+def campaign_counts(tid,start=None,end=None):
+    total=int((row("SELECT COUNT(*) c FROM prospects WHERE claimed_team_id=:t",t=tid) or {"c":0})["c"])
+    ready=int((row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND status='ready'",t=tid) or {"c":0})["c"])
+    imported=int((row("SELECT COUNT(*) c FROM messages WHERE team_id=:t",t=tid) or {"c":0})["c"])
+    if start and end:
+        sent=int((row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND sent_at<>'' AND sent_at>=:s AND sent_at<:e",t=tid,s=iso(start),e=iso(end)) or {"c":0})["c"])
+        replied=int((row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND replied_at<>'' AND replied_at>=:s AND replied_at<:e",t=tid,s=iso(start),e=iso(end)) or {"c":0})["c"])
+    else:
+        sent=int((row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND sent_at<>''",t=tid) or {"c":0})["c"])
+        replied=int((row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND replied_at<>''",t=tid) or {"c":0})["c"])
+    return {"authors":total,"imported":imported,"ready":ready,"sent":sent,"replied":replied}
+
+async def campaign(chat,uid,arg=""):
+    t=team(uid)
+    if not t:return await send(chat,"Join/create a team first.")
+    start=end=None;label="All time"
+    if arg:
+        p=arg.split()
+        if len(p)==2:
+            try:
+                start=datetime.strptime(p[0],"%Y-%m-%d").replace(tzinfo=TZ).astimezone(timezone.utc)
+                end=datetime.strptime(p[1],"%Y-%m-%d").replace(tzinfo=TZ).astimezone(timezone.utc)+timedelta(days=1)
+                label=f"{p[0]} to {p[1]}"
+            except:return await send(chat,"Use /campaign YYYY-MM-DD YYYY-MM-DD")
+    x=campaign_counts(t["id"],start,end)
+    rate=(x["replied"]/x["sent"]*100) if x["sent"] else 0
+    await send(chat,
+        f"<b>📊 {esc(t['name'])} campaign</b>\\n"
+        f"Period: {esc(label)}\\n\\n"
+        f"Authors scouted: <b>{x['authors']}</b>\\n"
+        f"Messages imported: <b>{x['imported']}</b>\\n"
+        f"Ready to send: <b>{x['ready']}</b>\\n"
+        f"Sent: <b>{x['sent']}</b>\\n"
+        f"Replies marked: <b>{x['replied']}</b>\\n"
+        f"Reply rate: <b>{rate:.1f}%</b>"
+    )
+
+async def replies_view(chat,uid):
+    t=team(uid)
+    if not t:return await send(chat,"Join/create a team first.")
+    rs=rows("""SELECT m.id,m.sent_at,COALESCE(NULLIF(m.recipient_email,''),p.email) email,p.name
+        FROM messages m JOIN prospects p ON p.id=m.prospect_id
+        WHERE m.team_id=:t AND m.status='sent' AND COALESCE(m.reply_status,'')=''
+        ORDER BY m.sent_at DESC LIMIT 10""",t=t["id"])
+    if not rs:return await send(chat,"No sent messages waiting to be marked as replied.")
+    kb={"inline_keyboard":[[{"text":f"📬 {r['name'][:30]}","callback_data":f"replied:{r['id']}"}] for r in rs]}
+    return await send(chat,"<b>Mark an author as replied</b>\\nTap the author when a reply arrives.",kb)
+
+async def auto_send_message(chat,uid,mid,gid=None):
+    t=team(uid)
+    if not t:return await send(chat,"Join/create a team first.")
+    if gid:
+        sender=row("SELECT * FROM gmail_accounts WHERE id=:g AND telegram_user_id=:u",g=gid,u=uid)
+    else:
+        sender=row("SELECT * FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id LIMIT 1",u=uid)
+    if not sender:return await send(chat,"🔒 Automatic sending is disabled until Gmail is connected. Use /gmail first.")
+    m=row("""SELECT m.*,p.name,COALESCE(NULLIF(m.recipient_email,''),p.email) recipient
+        FROM messages m JOIN prospects p ON p.id=m.prospect_id
+        WHERE m.id=:m AND m.team_id=:t""",m=mid,t=t["id"])
+    if not m:return await send(chat,"Message not found.")
+    if not m["recipient"]:return await send(chat,"This author has no recipient email.")
+    if m["status"]=="sent":return await send(chat,"This message is already marked sent.")
+    try:
+        await gmail_send(sender,m["recipient"],m["subject"],m["body"])
+        execq("""UPDATE messages SET status='sent',sender_email=:e,sent_by_user_id=:u,sent_at=:d,updated_at=:d,sent_via='gmail_api',auto_sent=1
+            WHERE id=:m AND team_id=:t""",e=sender["email"],u=uid,d=iso(),m=mid,t=t["id"])
+        await send(chat,f"✅ Sent automatically from <code>{esc(sender['email'])}</code> to <code>{esc(m['recipient'])}</code>.")
+        return await queue(chat,uid)
+    except Exception as e:
+        print(f"AUTO_SEND_ERROR {type(e).__name__}: {e}")
+        return await send(chat,"Automatic send failed. The message was not marked sent. Check Gmail connection and try again.")
+
+def main_menu():
+    return {"inline_keyboard":[
+        [{"text":"🔎 Scout Authors","callback_data":"menu:scout"},{"text":"📥 Download for ChatGPT","callback_data":"menu:export"}],
+        [{"text":"📤 Upload ChatGPT File","callback_data":"menu:upload"},{"text":"📨 Message Queue","callback_data":"menu:queue"}],
+        [{"text":"📊 Campaign Stats","callback_data":"menu:campaign"},{"text":"📬 Replies","callback_data":"menu:replies"}],
+        [{"text":"🔗 Gmail","callback_data":"menu:gmail"},{"text":"⚡ Automatic Sending","callback_data":"menu:auto"}],
+        [{"text":"🔍 Last Search","callback_data":"menu:lastsearch"},{"text":"👥 Team","callback_data":"menu:team"}],
+        [{"text":"❓ Help","callback_data":"menu:help"}]
+    ]}
+
+async def last_search(chat,uid):
+    t=team(uid)
+    if not t:return await send(chat,"Join/create a team first.")
+    r=row("SELECT * FROM search_runs WHERE team_id=:t ORDER BY id DESC LIMIT 1",t=t["id"])
+    if not r:return await send(chat,"No completed search has been recorded yet.")
+    try:routes=json.loads(r["search_routes"] or "[]")
+    except:routes=[]
+    lines="\\n".join([f"{i+1}. <code>{esc(q)}</code>" for i,q in enumerate(routes)])
+    return await send(chat,
+        f"<b>🔍 Last search</b>\\n"
+        f"Request: <code>{esc(r['request_text'])}</code>\\n"
+        f"Raw results: <b>{r['raw_results']}</b>\\n"
+        f"Candidates: <b>{r['candidates']}</b>\\n"
+        f"Checked: <b>{r['checked']}</b>\\n"
+        f"Accepted: <b>{r['accepted']}</b>\\n"
+        f"Duplicates: <b>{r['duplicates']}</b>\\n\\n"
+        f"<b>Exact search routes used</b>\\n{lines or 'None'}"
+    )
+
 async def live_test(chat,uid,mid,gid):
     t=team(uid)
     m=row("SELECT m.*,p.name,p.email FROM messages m JOIN prospects p ON p.id=m.prospect_id WHERE m.id=:m AND m.team_id=:t",m=mid,t=t["id"])
@@ -430,7 +688,7 @@ async def live_test(chat,uid,mid,gid):
     sent=0
     for a in pool:
         try:
-            await gmail_send(sender,a["email"],"[Deliverability Test] "+m["subject"],m["body"])
+            await gmail_send(sender,a["email"],m["subject"],m["body"])
             execq("INSERT INTO delivery_test_recipients(test_id,gmail_account_id,owner_user_id,email,result,sent_at) VALUES(:t,:g,:u,:e,'pending',:d)",t=test_id,g=a["id"],u=a["telegram_user_id"],e=a["email"],d=iso());sent+=1
             kb={"inline_keyboard":[[{"text":"Inbox","callback_data":f"place:{test_id}:{a['id']}:inbox"},{"text":"Spam","callback_data":f"place:{test_id}:{a['id']}:spam"}],[{"text":"Promotions","callback_data":f"place:{test_id}:{a['id']}:promotions"},{"text":"Not received","callback_data":f"place:{test_id}:{a['id']}:not_received"}]]}
             await send(a["telegram_user_id"],f"🧪 <b>Deliverability test</b>\nCheck <code>{esc(a['email'])}</code> for a message from <code>{esc(sender['email'])}</code>, then report where it landed.",kb)
@@ -468,61 +726,160 @@ async def cmd_stats(chat,uid,arg=""):
 async def import_sheet(chat,uid,doc):
     t=team(uid)
     if not t:return await send(chat,"Join/create a team first.")
-    info=await tg("getFile",{"file_id":doc["file_id"]}); ext=Path(doc.get("file_name") or "x.xlsx").suffix.lower()
-    async with httpx.AsyncClient(timeout=60) as c:r=await c.get(f"{TGFILE}/{info['file_path']}");data=r.content
-    table=list(csv.reader(io.StringIO(data.decode("utf-8-sig")))) if ext==".csv" else [list(x) for x in load_workbook(io.BytesIO(data),read_only=True,data_only=True).active.iter_rows(values_only=True)]
-    h=[str(x or "").strip().lower() for x in table[0]]
+    info=await tg("getFile",{"file_id":doc["file_id"]});ext=Path(doc.get("file_name") or "x.xlsx").suffix.lower()
+    async with httpx.AsyncClient(timeout=60) as hc:
+        r=await hc.get(f"{TGFILE}/{info['file_path']}");r.raise_for_status();data=r.content
+    if ext==".csv":
+        table=list(csv.reader(io.StringIO(data.decode("utf-8-sig"))))
+    elif ext in {".xlsx",".xlsm"}:
+        book=load_workbook(io.BytesIO(data),read_only=True,data_only=True)
+        sh=book["Authors & Messages"] if "Authors & Messages" in book.sheetnames else book.active
+        table=[list(x) for x in sh.iter_rows(values_only=True)]
+    else:
+        return await send(chat,"Upload an XLSX or CSV file.")
+    if not table:return await send(chat,"The uploaded file is empty.")
+    h=[norm_header(x) for x in table[0]]
     def ix(names):
-        for n in names:
-            if n in h:return h.index(n)
-    ia,ie,isub,ib=ix(["author","author name","name"]),ix(["email","author email"]),ix(["subject","subject line"]),ix(["first message","message","body","email body"])
-    if isub is None or ib is None:return await send(chat,"Need Author/Email, Subject and First Message columns.")
-    ps=rows("SELECT * FROM prospects WHERE claimed_team_id=:t",t=t["id"]);bn={p["name"].lower():p for p in ps};be={p["email"].lower():p for p in ps if p["email"]};matched=0
-    for r in table[1:]:
-        g=lambda i:str(r[i] or "").strip() if i is not None and i<len(r) else ""
-        p=be.get(g(ie).lower()) if ie is not None else None
+        wanted={norm_header(n) for n in names}
+        for i,n in enumerate(h):
+            if n in wanted:return i
+        return None
+    iid=ix(["Canonical Author ID","Source Row ID"])
+    ia=ix(["Author Name — Verified","Author","Author Name","Name","Author Name — Bot"])
+    ie=ix(["Public Professional Email","Verified Public Email","Email","Author Email","Public Professional Email — Bot"])
+    iw=ix(["Official Website","Verified Official Website","Website"])
+    ies=ix(["Email Source URL"])
+    ist=ix(["Processing Status"])
+    isub=ix(["Selected Subject","Subject","Subject Line","Subject Option 1"])
+    ib=ix(["Best First Message — Author Language","First Message","Message","Body","Email Body"])
+    ibe=ix(["Best First Message — English","English Version"])
+    if isub is None or ib is None:
+        return await send(chat,"I found the file, but it needs the ChatGPT output columns <b>Selected Subject</b> and <b>Best First Message — Author Language</b>.")
+    ps=rows("SELECT * FROM prospects WHERE claimed_team_id=:t",t=t["id"])
+    byid={f"as-{p['id']}":p for p in ps};bn={p["name"].lower():p for p in ps};be={p["email"].lower():p for p in ps if p["email"]}
+    matched=ready=skipped=unmatched=0
+    for rr in table[1:]:
+        g=lambda i:str(rr[i] or "").strip() if i is not None and i<len(rr) else ""
+        p=None
+        if iid is not None:
+            rid=g(iid).lower()
+            p=byid.get(rid)
+        if not p and ie is not None:p=be.get(g(ie).lower())
         if not p and ia is not None:p=bn.get(g(ia).lower())
-        if not p:continue
+        if not p:
+            unmatched+=1;continue
+        subject=g(isub);body=g(ib)
+        if not subject or not body:
+            skipped+=1;continue
+        status=g(ist).upper() if ist is not None else ""
+        if status and status not in {"COMPLETED","READY","READY FOR OUTREACH"}:
+            skipped+=1;continue
+        recipient=g(ie) or p["email"];english=g(ibe)
         ex=row("SELECT id,status FROM messages WHERE team_id=:t AND prospect_id=:p ORDER BY id DESC LIMIT 1",t=t["id"],p=p["id"])
-        if ex:execq("UPDATE messages SET subject=:s,body=:b,status=CASE WHEN status='sent' THEN status ELSE 'ready' END,updated_at=:d WHERE id=:i",s=g(isub),b=g(ib),d=iso(),i=ex["id"])
-        else:execq("INSERT INTO messages(team_id,prospect_id,imported_by_user_id,subject,body,status,created_at,updated_at) VALUES(:t,:p,:u,:s,:b,'ready',:d,:d)",t=t["id"],p=p["id"],u=uid,s=g(isub),b=g(ib),d=iso())
-        matched+=1
-    await send(chat,f"✅ Imported {matched} message(s). Use /queue.")
+        vals={"t":t["id"],"p":p["id"],"u":uid,"s":subject,"b":body,"be":english,"re":recipient.lower(),"d":iso()}
+        if ex:
+            execq("""UPDATE messages SET subject=:s,body=:b,body_english=:be,recipient_email=:re,
+                status=CASE WHEN status='sent' THEN status ELSE 'ready' END,updated_at=:d WHERE id=:i""",
+                s=subject,b=body,be=english,re=recipient.lower(),d=iso(),i=ex["id"])
+        else:
+            execq("""INSERT INTO messages(team_id,prospect_id,imported_by_user_id,subject,body,body_english,recipient_email,status,created_at,updated_at)
+                VALUES(:t,:p,:u,:s,:b,:be,:re,'ready',:d,:d)""",**vals)
+        matched+=1;ready+=1
+    await send(chat,
+        f"✅ ChatGPT file imported.\\n"
+        f"Matched authors: <b>{matched}</b>\\n"
+        f"Ready messages: <b>{ready}</b>\\n"
+        f"Skipped/no final message: <b>{skipped}</b>\\n"
+        f"Unmatched rows: <b>{unmatched}</b>\\n\\n"
+        f"Use /queue to start sending."
+    )
 
 async def queue(chat,uid,skip=None):
     t=team(uid)
     if not t:return await send(chat,"Join/create a team first.")
-    q=rows("SELECT m.*,p.name,p.email FROM messages m JOIN prospects p ON p.id=m.prospect_id WHERE m.team_id=:t AND m.status='ready' ORDER BY m.id",t=t["id"])
+    q=rows("""SELECT m.*,p.name,COALESCE(NULLIF(m.recipient_email,''),p.email) recipient
+        FROM messages m JOIN prospects p ON p.id=m.prospect_id
+        WHERE m.team_id=:t AND m.status='ready' ORDER BY m.id""",t=t["id"])
     if skip:q=[x for x in q if x["id"]!=skip]+[x for x in q if x["id"]==skip]
-    if not q:return await send(chat,"No unsent messages.")
-    m=q[0]; token=serializer.dumps({"uid":uid,"mid":m["id"]});url=f"{BASE}/compose?t={token}" if BASE else "https://mail.google.com/"
-    kb={"inline_keyboard":[[{"text":"📨 Open Gmail","url":url},{"text":"✅ Mark Sent","callback_data":f"sent:{m['id']}"}],[{"text":"🧪 Live Deliverability Test","callback_data":f"test:{m['id']}"},{"text":"⏭ Skip","callback_data":f"skip:{m['id']}"}]]}
-    await send(chat,f"<b>{esc(m['name'])}</b>\nTo: <code>{esc(m['email'])}</code>\n\n<b>Subject</b>\n{esc(m['subject'])}\n\n<b>Message</b>\n{esc(m['body'])}\n\n{len(q)} unsent",kb)
+    if not q:return await send(chat,"No unsent messages. Use /campaign to see your current totals.")
+    m=q[0];token=serializer.dumps({"uid":uid,"mid":m["id"]});url=f"{BASE}/compose?t={token}" if BASE else "https://mail.google.com/"
+    has_gmail=bool(row("SELECT id FROM gmail_accounts WHERE telegram_user_id=:u LIMIT 1",u=uid))
+    auto_text="⚡ Auto Send" if has_gmail else "🔒 Auto Send"
+    kb={"inline_keyboard":[
+        [{"text":"📨 Open Gmail","url":url},{"text":"✅ Mark Sent","callback_data":f"sent:{m['id']}"}],
+        [{"text":auto_text,"callback_data":f"autosend:{m['id']}"},{"text":"⏭ Skip","callback_data":f"skip:{m['id']}"}],
+        [{"text":"🧪 Deliverability Test","callback_data":f"test:{m['id']}"},{"text":"📊 Stats","callback_data":"menu:campaign"}]
+    ]}
+    await send(chat,
+        f"<b>{esc(m['name'])}</b>\\n"
+        f"To: <code>{esc(m['recipient'] or 'no email')}</code>\\n\\n"
+        f"<b>Subject</b>\\n{esc(m['subject'])}\\n\\n"
+        f"<b>Message</b>\\n{esc(m['body'])}\\n\\n"
+        f"<b>{len(q)}</b> message(s) ready",
+        kb
+    )
 
 HELP="""<b>Author Scout Team Bot</b>
+
+<b>Scout</b>
+/find Karim in Saudi Arabia
+/find country=UAE genre=fiction gender=male email=yes
+/research Author Name
+/authors
+/lastsearch
+
+<b>ChatGPT handoff</b>
+/export — download ChatGPT-ready XLSX with the research prompt embedded
+/brief — download the workflow instructions
+Upload ChatGPT's returned XLSX/CSV directly to the bot.
+
+<b>Outreach</b>
+/queue — ready messages
+/replies — mark author replies
+/campaign — authors, ready, sent and replies
+/campaign YYYY-MM-DD YYYY-MM-DD
+/gmail — connect Gmail and manage test inboxes
+/autosend — automatic sending status
+/deliverytests
+
+<b>Team</b>
 /newteam Team Name
 /join CODE
 /team
-/find 10 | UAE | fiction | male | email
-/research Author Name
-/authors
-/export
-/brief
-/queue
-/gmail
-/deliverytests
 /stats
-/stats 2026-09-01 2026-09-15
 /leaderboard
+/menu
 
-Upload ChatGPT XLSX/CSV directly to import messages.
-The same prospect cannot be claimed twice anywhere in the bot."""
+The same prospect is blocked globally from being claimed twice."""
 
 async def handle(up):
     if up.get("callback_query"):
         cb=up["callback_query"];uid=ensure_user(cb["from"]);chat=cb["message"]["chat"]["id"];await tg("answerCallbackQuery",{"callback_query_id":cb["id"]});d=cb.get("data","");t=team(uid)
+        if d=="menu:scout":return await send(chat,"Type what you want naturally, for example:\n<code>Karim in Saudi Arabia</code>\n<code>10 fantasy authors in Canada with public email</code>\nOr use explicit filters with /find.")
+        if d=="menu:export":return await export_chatgpt(chat,uid)
+        if d=="menu:upload":return await send(chat,"📤 Upload the XLSX that ChatGPT returned. I will match authors by AS- ID first and import the selected subject + final first message.")
+        if d=="menu:queue":return await queue(chat,uid)
+        if d=="menu:campaign":return await campaign(chat,uid)
+        if d=="menu:replies":return await replies_view(chat,uid)
+        if d=="menu:gmail":
+            acs=rows("SELECT * FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id",u=uid);lines=["<b>Gmail / test inboxes</b>"]+[f"• {esc(a['email'])} — {'ON '+a['test_scope'] if a['test_opt_in'] else 'OFF'}" for a in acs]
+            kb={"inline_keyboard":[]}
+            if gmail_ok():kb["inline_keyboard"].append([{"text":"➕ Connect Gmail","url":f"{BASE}/oauth/google/start?t="+serializer.dumps({'uid':uid})}])
+            for a in acs:kb["inline_keyboard"] += [[{"text":"Team pool","callback_data":f"opt:{a['id']}:team"},{"text":"Global pool","callback_data":f"opt:{a['id']}:global"},{"text":"Off","callback_data":f"off:{a['id']}"}]]
+            return await send(chat,"\n".join(lines) if len(lines)>1 else "<b>Gmail</b>\nNo Gmail account connected yet.",kb if kb["inline_keyboard"] else None)
+        if d=="menu:auto":
+            a=row("SELECT email FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id LIMIT 1",u=uid)
+            return await send(chat,f"⚡ Automatic sending is enabled through <code>{esc(a['email'])}</code>. Open /queue and tap Auto Send." if a else "🔒 Automatic sending is disabled until Gmail is connected. Use /gmail.")
+        if d=="menu:lastsearch":return await last_search(chat,uid)
+        if d=="menu:team":
+            t=team(uid);return await send(chat,f"<b>{esc(t['name'])}</b>\nInvite: <code>{t['invite_code']}</code>" if t else "No team.")
+        if d=="menu:help":return await send(chat,HELP,main_menu())
+        if d.startswith("autosend:"):return await auto_send_message(chat,uid,int(d.split(":")[1]))
+        if d.startswith("replied:") and t:
+            mid=int(d.split(":")[1]);execq("UPDATE messages SET reply_status='replied',replied_at=:d,updated_at=:d WHERE id=:m AND team_id=:t",d=iso(),m=mid,t=t["id"])
+            await send(chat,"✅ Reply recorded.");return await replies_view(chat,uid)
         if d.startswith("sent:") and t:
-            mid=int(d.split(":")[1]);execq("UPDATE messages SET status='sent',sent_by_user_id=:u,sent_at=:d,updated_at=:d WHERE id=:m AND team_id=:t",u=uid,d=iso(),m=mid,t=t["id"]);return await queue(chat,uid)
+            mid=int(d.split(":")[1]);execq("UPDATE messages SET status='sent',sent_by_user_id=:u,sent_at=:d,updated_at=:d,sent_via='manual' WHERE id=:m AND team_id=:t",u=uid,d=iso(),m=mid,t=t["id"]);return await queue(chat,uid)
         if d.startswith("skip:"):return await queue(chat,uid,int(d.split(":")[1]))
         if d.startswith("test:") and t:
             mid=int(d.split(":")[1]);acs=rows("SELECT id,email FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id",u=uid)
@@ -554,7 +911,8 @@ async def handle(up):
             cmd="/find";arg=natural.group(1).strip()
         elif t:
             cmd="/find";arg=txt
-    if cmd in {"/start","/help"}:return await send(chat,HELP)
+    if cmd in {"/start","/help","/menu"}:
+        return await send(chat,HELP,main_menu())
     if cmd=="/newteam":
         if t:return await send(chat,"You are already in a team.")
         if not arg:return await send(chat,"Use /newteam Team Name")
@@ -593,6 +951,8 @@ async def handle(up):
         found,meta=await find_authors(spec,progress)
         n=spec["count"];new=dup=0
         if not found:
+            execq("""INSERT INTO search_runs(team_id,telegram_user_id,request_text,parsed_spec,search_routes,raw_results,candidates,checked,accepted,duplicates,created_at)
+                VALUES(:t,:u,:r,:p,:q,:raw,:c,:ch,0,0,:d)""",t=t["id"],u=uid,r=arg,p=json.dumps(spec),q=json.dumps(meta.get("queries",[])),raw=meta["raw_results"],c=meta["candidates"],ch=meta["checked"],d=iso())
             return await progress(
                 f"⚠️ <b>Scout finished with no verified matches</b>\n"
                 f"Raw search results: <b>{meta['raw_results']}</b>\n"
@@ -613,6 +973,8 @@ async def handle(up):
                 f"Duplicates blocked: <b>{dup}</b>"
             )
             if new>=n:break
+        execq("""INSERT INTO search_runs(team_id,telegram_user_id,request_text,parsed_spec,search_routes,raw_results,candidates,checked,accepted,duplicates,created_at)
+            VALUES(:t,:u,:r,:p,:q,:raw,:c,:ch,:a,:du,:d)""",t=t["id"],u=uid,r=arg,p=json.dumps(spec),q=json.dumps(meta.get("queries",[])),raw=meta["raw_results"],c=meta["candidates"],ch=meta["checked"],a=new,du=dup,d=iso())
         return await progress(
             f"✅ <b>Scout complete</b>\n"
             f"New claimed: <b>{new}</b>\n"
@@ -628,7 +990,17 @@ async def handle(up):
     if cmd=="/authors":
         t=team(uid);ps=rows("SELECT * FROM prospects WHERE claimed_team_id=:t ORDER BY id DESC LIMIT 30",t=t["id"]) if t else []
         return await send(chat,"\n".join([f"• {esc(p['name'])} — {esc(p['email'] or 'no email')}" for p in ps]) or "No authors.")
-    if cmd=="/stats":return await cmd_stats(chat,uid,arg)
+    if cmd=="/export":return await export_chatgpt(chat,uid)
+    if cmd=="/brief":return await send_brief(chat,uid)
+    if cmd=="/lastsearch":return await last_search(chat,uid)
+    if cmd=="/campaign":return await campaign(chat,uid,arg)
+    if cmd=="/replies":return await replies_view(chat,uid)
+    if cmd=="/autosend":
+        a=row("SELECT email FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id LIMIT 1",u=uid)
+        return await send(chat,f"⚡ Automatic sending is enabled through <code>{esc(a['email'])}</code>. Use /queue and tap Auto Send on the message you approve." if a else "🔒 Automatic sending is disabled. Connect Gmail with /gmail first.")
+    if cmd=="/stats":
+        await campaign(chat,uid,arg)
+        return
     if cmd=="/leaderboard":
         s=now().astimezone(TZ).replace(hour=0,minute=0,second=0,microsecond=0).astimezone(timezone.utc);ls=rows("SELECT u.first_name,u.username,COUNT(*) c FROM scout_events x JOIN users u ON u.telegram_user_id=x.telegram_user_id WHERE x.created_at>=:s GROUP BY x.telegram_user_id,u.first_name,u.username ORDER BY c DESC LIMIT 10",s=iso(s));return await send(chat,"<b>🏆 Today</b>\n"+"\n".join([f"{i+1}. {esc(r['first_name'] or '@'+r['username'])} — {r['c']}" for i,r in enumerate(ls)]))
     if cmd=="/queue":return await queue(chat,uid)
@@ -661,6 +1033,20 @@ async def startup():
             await tg("setWebhook",{"url":f"{BASE}/telegram/webhook","secret_token":WEBHOOK_SECRET})
             info=await tg("getWebhookInfo")
             print(f"TG_WEBHOOK url={info.get('url','')} pending={info.get('pending_update_count',0)} last_error={info.get('last_error_message','')}")
+            await tg("setMyCommands",{"commands":json.dumps([
+                {"command":"menu","description":"Open Author Scout menu"},
+                {"command":"find","description":"Scout authors using filters or natural language"},
+                {"command":"authors","description":"Show recently scouted authors"},
+                {"command":"lastsearch","description":"Show exact last search routes"},
+                {"command":"export","description":"Download ChatGPT-ready author workbook"},
+                {"command":"queue","description":"Open ready outreach messages"},
+                {"command":"campaign","description":"Show authors, sent and reply totals"},
+                {"command":"replies","description":"Mark author replies"},
+                {"command":"gmail","description":"Connect Gmail / deliverability settings"},
+                {"command":"autosend","description":"Automatic sending status"},
+                {"command":"team","description":"Show team and invite code"},
+                {"command":"help","description":"Show help"}
+            ])})
         except Exception as e:
             print(f"TG_DIAGNOSTIC token_ok=False error={type(e).__name__}: {e}")
 
@@ -668,16 +1054,6 @@ async def startup():
 async def root():return {"ok":True,"name":"Author Scout Team Bot","version":"2.0"}
 @app.get("/health")
 async def health():return {"ok":True}
-
-@app.get("/debug/search-test")
-async def debug_search_test():
-    q="Saudi Arabia author official website contact email"
-    rs=await search(q,5)
-    return {
-        "ok": bool(rs),
-        "count": len(rs),
-        "sample": [{"title":x.get("title","")[:120],"url":x.get("url","")} for x in rs[:3]]
-    }
 
 @app.get("/debug/db")
 async def debug_db():
@@ -727,7 +1103,7 @@ async def oauth_callback(code:str,state:str,error:str=""):
 @app.get("/compose")
 async def compose(t:str):
     p=serializer.loads(t,max_age=3600);uid=int(p["uid"]);mid=int(p["mid"]);tm=team(uid)
-    m=row("SELECT m.*,p.email recipient FROM messages m JOIN prospects p ON p.id=m.prospect_id WHERE m.id=:m AND m.team_id=:t",m=mid,t=tm["id"])
+    m=row("SELECT m.*,COALESCE(NULLIF(m.recipient_email,''),p.email) recipient FROM messages m JOIN prospects p ON p.id=m.prospect_id WHERE m.id=:m AND m.team_id=:t",m=mid,t=tm["id"])
     if not m:raise HTTPException(404)
     params={"view":"cm","fs":"1","to":m["recipient"],"su":m["subject"],"body":m["body"]}
     return RedirectResponse("https://mail.google.com/mail/?"+urlencode(params))
