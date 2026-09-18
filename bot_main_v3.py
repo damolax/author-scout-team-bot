@@ -247,7 +247,7 @@ def init_connection_db() -> None:
             snippet TEXT DEFAULT '',
             status TEXT NOT NULL DEFAULT 'discovered',
             times_selected INTEGER NOT NULL DEFAULT 0,
-            verified_payload TEXT DEFAULT '{}',
+            verified_payload TEXT DEFAULT '{{}}',
             verification_status TEXT DEFAULT '',
             last_verified_at TEXT DEFAULT '',
             discovered_at TEXT NOT NULL,
