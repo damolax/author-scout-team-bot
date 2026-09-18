@@ -422,8 +422,13 @@ async def startup():
     init_db()
     if TOKEN and BASE and WEBHOOK_SECRET:
         try:
+            me=await tg("getMe")
+            print(f"TG_DIAGNOSTIC token_ok=True bot=@{me.get('username','')}")
             await tg("setWebhook",{"url":f"{BASE}/telegram/webhook","secret_token":WEBHOOK_SECRET})
-        except Exception as e: print(e)
+            info=await tg("getWebhookInfo")
+            print(f"TG_WEBHOOK url={info.get('url','')} pending={info.get('pending_update_count',0)} last_error={info.get('last_error_message','')}")
+        except Exception as e:
+            print(f"TG_DIAGNOSTIC token_ok=False error={type(e).__name__}: {e}")
 
 @app.get("/")
 async def root():return {"ok":True,"name":"Author Scout Team Bot","version":"2.0"}
