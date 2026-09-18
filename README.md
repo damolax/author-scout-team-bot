@@ -57,3 +57,17 @@ Start:
 `uvicorn bot_main_v3:app --host 0.0.0.0 --port $PORT`
 
 `bot_main.py` remains in the repository as the v2 fallback. To roll back, point Render's start command back to `uvicorn bot_main:app ...`.
+
+## Persistent author source index
+
+Author Scout v3.2 now keeps a persistent, demand-driven author reservoir in the database.
+
+- Every `/find` request updates a search-demand profile.
+- The background source-index worker discovers useful author directories, literature centres, writers' associations, agencies, publishers, festivals and list pages.
+- Candidate identities are stored in `author_candidate_pool`.
+- A configurable number are pre-verified in the background for website, public professional email and recent activity.
+- `/find` uses already verified reservoir records first and only opens fresh web discovery when the reservoir cannot fill the request.
+- Claimed authors are suppressed in the reservoir so they are not recycled.
+- Use `/indexstatus` to inspect reservoir, verification and source counts.
+
+This is designed to reduce cold-search latency substantially as the reservoir warms up.
