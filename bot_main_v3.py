@@ -13,7 +13,7 @@ import bot_main as legacy
 from sqlalchemy import text
 
 app = legacy.app
-app.version = "3.1"
+app.version = "3.2"
 
 # ---------------------------------------------------------------------------
 # Author Scout v3 overlay
@@ -43,6 +43,17 @@ SEARCH_PRIMARY_BACKEND = os.getenv("SEARCH_PRIMARY_BACKEND", "bing").strip() or 
 SEARCH_FALLBACK_BACKEND = os.getenv("SEARCH_FALLBACK_BACKEND", "duckduckgo").strip() or "duckduckgo"
 HTTP_MAX_CONNECTIONS = max(10, int(os.getenv("HTTP_MAX_CONNECTIONS", "40")))
 HTTP_KEEPALIVE_CONNECTIONS = max(5, int(os.getenv("HTTP_KEEPALIVE_CONNECTIONS", "20")))
+SOURCE_INDEX_ENABLED = os.getenv("SOURCE_INDEX_ENABLED", "true").strip().lower() in {"1","true","yes","on"}
+SOURCE_INDEX_INTERVAL = max(60, int(os.getenv("SOURCE_INDEX_INTERVAL_SECONDS", "300")))
+SOURCE_INDEX_CONCURRENCY = max(2, min(16, int(os.getenv("SOURCE_INDEX_CONCURRENCY", "8"))))
+SOURCE_INDEX_DEMANDS_PER_CYCLE = max(1, min(20, int(os.getenv("SOURCE_INDEX_DEMANDS_PER_CYCLE", "6"))))
+SOURCE_INDEX_SOURCE_PAGES_PER_DEMAND = max(1, min(10, int(os.getenv("SOURCE_INDEX_SOURCE_PAGES_PER_DEMAND", "4"))))
+SOURCE_INDEX_PREVERIFY_PER_CYCLE = max(1, min(50, int(os.getenv("SOURCE_INDEX_PREVERIFY_PER_CYCLE", "16"))))
+SOURCE_INDEX_POOL_TARGET = max(50, int(os.getenv("SOURCE_INDEX_POOL_TARGET_PER_MARKET", "300")))
+SOURCE_INDEX_DEFAULT_COUNTRIES = [x.strip() for x in os.getenv(
+    "SOURCE_INDEX_DEFAULT_COUNTRIES",
+    "United Kingdom,United States,Canada,Australia,France,Germany,Austria,United Arab Emirates,New Zealand,Spain,Iceland"
+).split(",") if x.strip()]
 
 _COUNTRY_ALIASES = {
     "usa": "United States", "us": "United States", "u.s.": "United States",
