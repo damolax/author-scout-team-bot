@@ -1,3 +1,15 @@
+# v3.2
+
+- Added persistent Neon author source registry.
+- Added demand-driven author candidate reservoir.
+- Added background source crawling for directories, associations, agencies, publishers and literature sources.
+- Added background pre-verification of website, public professional email and current activity.
+- Changed /find to use pre-verified reservoir candidates before fresh web discovery.
+- Freshly discovered candidates are written back to Neon for future runs.
+- Claimed authors are suppressed from the reservoir.
+- Added /indexstatus.
+- Kept v3.1 high-speed parallel search, cache, keep-alive HTTP and LinkedIn Connection Intelligence.
+
 # Changelog
 
 ## v3.1 — Connection Intelligence + High-Speed Research
