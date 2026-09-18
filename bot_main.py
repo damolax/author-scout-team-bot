@@ -139,11 +139,24 @@ async def send_doc(chat,path,cap=""):
     with open(path,"rb") as f: return await tg("sendDocument",{"chat_id":str(chat),"caption":cap},{"document":(Path(path).name,f)})
 
 def ddgs(q,n=10):
-    out=[]
+    out=[]; seen=set()
+    backends=["bing","duckduckgo","brave","yahoo"]
     try:
         with DDGS(timeout=max(5,int(TIMEOUT))) as d:
-            for x in d.text(q,max_results=n,safesearch="moderate"):
-                out.append({"title":x.get("title",""),"url":x.get("href") or x.get("url",""),"snippet":x.get("body") or x.get("snippet","")})
+            for backend in backends:
+                if len(out)>=n: break
+                try:
+                    results=d.text(q,max_results=n,safesearch="moderate",backend=backend)
+                    got=0
+                    for x in results:
+                        u=x.get("href") or x.get("url","")
+                        if not u or u in seen: continue
+                        seen.add(u); got+=1
+                        out.append({"title":x.get("title",""),"url":u,"snippet":x.get("body") or x.get("snippet","")})
+                        if len(out)>=n: break
+                    print(f"SEARCH_BACKEND backend={backend} count={got}")
+                except Exception as e:
+                    print(f"SEARCH_BACKEND_ERROR backend={backend} {type(e).__name__}: {e}")
     except Exception as e:
         print(f"SEARCH_ERROR {type(e).__name__}: {e}")
     print(f"SEARCH_RESULT count={len(out)} query={q[:140]}")
@@ -244,10 +257,14 @@ async def find_authors(country,genre,gender,count,require_email,progress=None):
     return out,{"raw_results":raw_results,"candidates":len(cands),"checked":checked,"with_email":with_email}
 
 def parse_find(a):
-    p=[x.strip() for x in a.split("|")]; n=10
+    p=[x.strip() for x in a.split("|") if x.strip()]; n=10
     try:n=int(p[0]);p=p[1:]
     except:pass
-    return min(max(n,1),MAX_FIND),p[0] if p else "any country",p[1] if len(p)>1 else "",p[2].lower() if len(p)>2 else "any",not(len(p)>3 and p[3].lower() in {"optional","no","noemail"})
+    country=p[0] if p else "any country"
+    genre=p[1] if len(p)>1 else ""
+    gender=p[2].lower() if len(p)>2 else "any"
+    require_email=not(len(p)>3 and p[3].lower() in {"optional","no","noemail"})
+    return min(max(n,1),MAX_FIND),country,genre,gender,require_email
 
 def enc(v):
     if not fernet:raise RuntimeError("TOKEN_ENCRYPTION_KEY missing")
