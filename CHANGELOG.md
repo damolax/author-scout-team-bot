@@ -1,14 +1,23 @@
 # Changelog
 
+## v3.1 — Connection Intelligence + High-Speed Research
+
+- Added continuous background LinkedIn Connection Intelligence.
+- Added `/connectsetup`, `/connections`, `/connectionstatus`, and `/connectionprefs`.
+- Added team-level LinkedIn profile deduplication and optional global exclusivity.
+- Added manual LinkedIn outcome buttons: Open LinkedIn, Mark Connected, Skip, Not Relevant, Save.
+- Connected profiles are archived instead of deleted so duplicate suppression is permanent.
+- Default public-location exclusion is Nigeria; nationality/ethnicity is never inferred.
+- Added connection fit scoring based on the canonical `CONNECTION_FIT_PROMPT_V1.txt` criteria.
+- Parallelized author discovery routes.
+- Increased bounded author verification concurrency (default 10).
+- Added fail-fast contact qualification before current-activity enrichment.
+- Added result caching for research and search queries.
+- Replaced multi-backend serial search cycling with fast primary search plus fallback only when needed.
+- Reused HTTP keep-alive connections instead of creating a new HTTP client for every page fetch.
+- Replaced per-candidate duplicate DB queries with one duplicate-set read per `/find` run.
+- Author verification now uses first-qualified-result completion and cancels remaining slow tasks once the requested batch is filled.
+
 ## v2.0
-- Shared global duplicate prevention
-- Team invite codes
-- Today/yesterday/7-day/custom-range stats
-- Global daily leaderboard
-- Rolling 5-hour leaderboard
-- ChatGPT message import queue
-- Manual Gmail compose and sent tracking
-- Multiple team members
-- Gmail send-only OAuth for live deliverability testing
-- Up to 10 randomly selected opted-in testing inboxes
-- Inbox / Promotions / Spam / Not received reporting
+
+- Existing team author scouting, shared duplicate prevention, ChatGPT workbook handoff, Gmail workflow, campaign stats, and deliverability testing.
