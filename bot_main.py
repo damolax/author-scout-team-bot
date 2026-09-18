@@ -448,10 +448,18 @@ async def debug_db():
         }
     except Exception:
         return {"configured": bool(raw), "scheme": "unknown", "host": "", "database": ""}
+async def safe_handle(update):
+    try:
+        await handle(update)
+    except Exception as e:
+        import traceback
+        print(f"HANDLER_ERROR {type(e).__name__}: {e}")
+        traceback.print_exc()
+
 @app.post("/telegram/webhook")
 async def webhook(request:Request,x_telegram_bot_api_secret_token:str|None=Header(default=None)):
     if x_telegram_bot_api_secret_token!=WEBHOOK_SECRET:raise HTTPException(403)
-    asyncio.create_task(handle(await request.json()));return {"ok":True}
+    asyncio.create_task(safe_handle(await request.json()));return {"ok":True}
 
 @app.get("/oauth/google/start")
 async def oauth_start(t:str):
