@@ -273,6 +273,15 @@ def _yes(v,default=True):
     if v is None:return default
     return str(v).strip().lower() not in {"0","no","false","off","optional","none","noemail"}
 
+def find_query_is_specific(spec):
+    if any((spec.get(k) or "").strip() for k in ("name","country","genre","language")):
+        return True
+    q=(spec.get("query") or "").strip().lower()
+    if not q:return False
+    generic={"author","authors","writer","writers","book","books","novelist","novelists","find","search","scout","people"}
+    toks=[x for x in re.findall(r"[a-z0-9À-ÿ'’-]+",q) if x not in generic]
+    return bool(toks)
+
 def parse_find(a):
     raw=(a or "").strip()
     spec={
@@ -1110,11 +1119,12 @@ async def handle(up):
                 "Use /cancel to stop.")
         clear_user_state(uid)
         spec=parse_find(arg)
-        if not any([(spec.get("query") or "").strip(),(spec.get("name") or "").strip(),
-                    (spec.get("country") or "").strip(),(spec.get("genre") or "").strip(),
-                    (spec.get("language") or "").strip()]):
+        if not find_query_is_specific(spec):
             set_user_state(uid,"awaiting_find_query")
-            return await send(chat,"Please give me a specific author search query first. No search has been started.")
+            return await send(chat,
+                "That search is too broad. No research has started.\n\n"
+                "Add at least one useful target such as country, genre, author name, language, career stage, or current activity.\n"
+                "Example: <code>10 emerging fantasy authors in Canada active in 2026</code>")
 
         status=await send(
             chat,
