@@ -614,13 +614,20 @@ async def source_index_worker():
     if not SOURCE_INDEX_ENABLED:
         print("SOURCE_INDEX_WORKER enabled=False")
         return
-    await asyncio.to_thread(_seed_default_demands)
+    # Author indexing is demand-driven. Do not invent generic author searches.
+    # Only explicit /find requests should create author search demand.
     while True:
         try:
             demands=legacy.rows("""SELECT * FROM author_search_demands
                 ORDER BY last_requested_at DESC,request_count DESC LIMIT :n""",n=SOURCE_INDEX_DEMANDS_PER_CYCLE)
             for d in demands:
                 try:
+                    qtext=(d.get("query_text") or "").strip().lower()
+                    is_legacy_generic=(qtext in {"author","authors","writer","writers"} and
+                        not (d.get("genre") or "").strip() and not (d.get("name_filter") or "").strip() and
+                        not (d.get("language") or "").strip() and int(d.get("request_count") or 0) <= 1)
+                    if is_legacy_generic:
+                        continue
                     current=legacy.row("""SELECT COUNT(*) c FROM author_candidate_pool
                         WHERE status IN ('verified','discovered') AND (:c='' OR lower(country)=lower(:c))""",c=d.get("country") or "")
                     if int((current or {"c":0})["c"]) < SOURCE_INDEX_POOL_TARGET:
@@ -650,9 +657,27 @@ async def show_index_status(chat: int):
 
 
 
+HIGH_SATURATION_AUTHOR_KEYS={
+    "jkrowling","stephenking","noraroberts","jamespatterson","danbrown","georgerrmartin",
+    "neilgaiman","johnmarrs","margaretatwood","paulocoelho","colleenhoover","johnGrisham".lower(),
+    "nicholassparks","suzannecollins","rickriordan","brandonSanderson".lower(),"leechild",
+    "davidbaldacci","harukimurakami","kazuoishiguro","salmanrushdie","chimamandangoziadichie",
+    "yualnoahharari","malcolmgladwell"
+}
+HIGH_SATURATION_MARKERS=(
+    "new york times bestselling","international bestseller","global bestseller",
+    "million copies","millions of copies","nobel prize","pulitzer prize",
+    "booker prize winner","world-famous","world famous"
+)
+
 def _author_candidate_quality(name: str, hint_url: str="", snippet: str="") -> bool:
     n=re.sub(r"\s+"," ",(name or "").strip())
     low=n.lower()
+    key=_norm_author_name(n)
+    if key in HIGH_SATURATION_AUTHOR_KEYS:return False
+    s=(snippet or "").lower()
+    if sum(1 for marker in HIGH_SATURATION_MARKERS if marker in s) >= 1:
+        return False
     if not (2 <= len(n.split()) <= 5): return False
     generic={
         "tech tips","contact us","about us","our team","board members","editorial team",
@@ -782,6 +807,11 @@ async def fast_research(name: str, country: str = "", genre: str = "", hint: str
 
 
 async def fast_find_authors(spec, progress=None):
+    if not any([(spec.get("query") or "").strip(),(spec.get("name") or "").strip(),
+                (spec.get("country") or "").strip(),(spec.get("genre") or "").strip(),
+                (spec.get("language") or "").strip()]):
+        return [],{"raw_results":0,"candidates":0,"checked":0,"with_email":0,"with_website":0,
+                   "query":"","queries":[],"elapsed_seconds":0,"reservoir_hits":0,"web_searches":0}
     count=int(spec["count"])
     country=spec.get("country","")
     genre=spec.get("genre","")
@@ -816,7 +846,10 @@ async def fast_find_authors(spec, progress=None):
     existing_names={_norm_author_name(r.get("name") or "") for r in existing_rows}
 
     pool=await asyncio.to_thread(_pool_candidates,spec,max(count*10,80))
-    pool=[p for p in pool if p.get("candidate_key") not in existing_keys and _norm_author_name(p.get("name") or "") not in existing_names]
+    pool=[p for p in pool
+          if p.get("candidate_key") not in existing_keys
+          and _norm_author_name(p.get("name") or "") not in existing_names
+          and _author_candidate_quality(p.get("name") or "",p.get("discovery_url") or "",p.get("snippet") or "")]
 
     out=[];checked=0;with_email=0;with_website=0;raw_results=0;reservoir_hits=0
     accepted_names=set();queries_used=["NEON_AUTHOR_RESERVOIR"]
