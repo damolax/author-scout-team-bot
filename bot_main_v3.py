@@ -389,7 +389,8 @@ def _norm_author_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
 
 def _pool_key(name: str, country: str = "") -> str:
-    return f"{_norm_author_name(name)}|{re.sub(r'[^a-z0-9]+','',(country or '').lower())}"
+    country_key=re.sub(r"[^a-z0-9]+","",(country or "").lower())
+    return _norm_author_name(name)+"|"+country_key
 
 def _demand_key(spec: dict) -> str:
     parts = [spec.get("country",""), spec.get("genre",""), spec.get("query",""),
