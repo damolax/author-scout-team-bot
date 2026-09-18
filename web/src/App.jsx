@@ -1,0 +1,552 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://author-scout-team-bot.onrender.com').replace(/\/$/, '')
+
+async function request(path, key, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  if (key) headers['X-Author-Scout-Key'] = key
+  const res = await fetch(API_BASE + path, { ...options, headers })
+  let body = {}
+  try { body = await res.json() } catch { body = {} }
+  if (!res.ok) throw new Error(body.detail || body.error || 'Request failed')
+  return body
+}
+
+function fmt(value) {
+  if (!value) return '—'
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
+}
+
+function short(text, n = 120) {
+  const s = String(text || '')
+  return s.length > n ? s.slice(0, n - 1) + '…' : s
+}
+
+function usePolling(callback, delay, active = true) {
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    let timer
+    const run = async () => {
+      try { await callback() } finally {
+        if (!cancelled) timer = setTimeout(run, delay)
+      }
+    }
+    run()
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [callback, delay, active])
+}
+
+function Status({ value }) {
+  const cls = String(value || '').toLowerCase().replace(/[^a-z_]/g, '')
+  return <span className={'status status-' + cls}>{value || 'unknown'}</span>
+}
+
+function Metric({ label, value, sub }) {
+  return (
+    <div className="metric">
+      <div className="metric-label">{label}</div>
+      <div className="metric-value">{value ?? 0}</div>
+      {sub && <div className="metric-sub">{sub}</div>}
+    </div>
+  )
+}
+
+function Empty({ title, body }) {
+  return (
+    <div className="empty">
+      <div className="empty-mark">◎</div>
+      <h3>{title}</h3>
+      <p>{body}</p>
+    </div>
+  )
+}
+
+function Login({ onLogin, busy, error }) {
+  const [key, setKey] = useState('')
+  return (
+    <div className="login-shell">
+      <div className="login-card">
+        <div className="brand brand-login">
+          <div className="brand-mark">AS</div>
+          <div>
+            <strong>Author Scout</strong>
+            <span>Research Intelligence</span>
+          </div>
+        </div>
+        <h1>Open your workspace</h1>
+        <p className="login-copy">
+          In Telegram, send <code>/webkey</code>, copy the signed key, then paste it here.
+          Your Render secret is never exposed to the browser.
+        </p>
+        <form onSubmit={(e) => { e.preventDefault(); onLogin(key.trim()) }}>
+          <label>Web access key</label>
+          <textarea
+            rows="4"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="Paste the key from /webkey"
+            autoFocus
+          />
+          {error && <div className="alert alert-error">{error}</div>}
+          <button className="button button-primary button-block" disabled={!key.trim() || busy}>
+            {busy ? 'Checking workspace…' : 'Enter Author Scout'}
+          </button>
+        </form>
+        <div className="login-foot">
+          <span>Backend</span>
+          <code>{API_BASE.replace('https://', '')}</code>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Dashboard({ keyValue, session }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    try { setData(await request('/api/v1/dashboard', keyValue)); setError('') }
+    catch (e) { setError(e.message) }
+  }, [keyValue])
+  usePolling(load, 8000)
+
+  const c = data?.counts || {}
+  const pool = data?.pool || {}
+  return (
+    <section>
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">Workspace overview</div>
+          <h1>{session?.team?.name || 'Author Scout'}</h1>
+          <p>Live research, qualified authors, connection intelligence and outreach activity.</p>
+        </div>
+        <button className="button button-quiet" onClick={load}>Refresh</button>
+      </div>
+      {error && <div className="alert alert-error">{error}</div>}
+      <div className="metric-grid">
+        <Metric label="Qualified authors" value={c.authors} sub="Saved to your team" />
+        <Metric label="Research running" value={c.jobs_queued} sub="Queued or processing" />
+        <Metric label="Ready connections" value={c.connections_ready} sub="Available now" />
+        <Metric label="Messages ready" value={c.messages_ready} sub="Waiting for outreach" />
+      </div>
+      <div className="two-col">
+        <div className="panel">
+          <div className="panel-head">
+            <div><span className="kicker">Research engine</span><h2>Pipeline health</h2></div>
+          </div>
+          <div className="stat-list">
+            <div><span>Completed research jobs</span><strong>{c.jobs_completed || 0}</strong></div>
+            <div><span>Candidate reservoir</span><strong>{pool.candidates || 0}</strong></div>
+            <div><span>Pre-verified candidates</span><strong>{pool.verified || 0}</strong></div>
+            <div><span>Indexed sources</span><strong>{pool.sources || 0}</strong></div>
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head">
+            <div><span className="kicker">Activity</span><h2>Acquisition status</h2></div>
+          </div>
+          <div className="stat-list">
+            <div><span>Connections completed</span><strong>{c.connections_done || 0}</strong></div>
+            <div><span>Messages sent</span><strong>{c.messages_sent || 0}</strong></div>
+            <div><span>Messages ready</span><strong>{c.messages_ready || 0}</strong></div>
+            <div><span>Background connection research</span><strong>On</strong></div>
+          </div>
+        </div>
+      </div>
+      <div className="panel callout">
+        <div>
+          <span className="kicker">How this version works</span>
+          <h2>Searches no longer block the interface.</h2>
+          <p>A research request becomes a queued job immediately. Render workers research in the background while this dashboard remains usable.</p>
+        </div>
+        <div className="flow">
+          <span>Query</span><b>→</b><span>Queue</span><b>→</b><span>Workers</span><b>→</b><span>Verify</span><b>→</b><span>Ready</span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function Research({ keyValue }) {
+  const [query, setQuery] = useState('')
+  const [count, setCount] = useState(25)
+  const [jobs, setJobs] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const [error, setError] = useState('')
+
+  const loadJobs = useCallback(async () => {
+    try {
+      const d = await request('/api/v1/research/jobs?limit=40', keyValue)
+      setJobs(d.jobs || [])
+      setError('')
+      if (selected && d.jobs?.some(j => j.id === selected.job?.id)) {
+        const detail = await request('/api/v1/research/jobs/' + selected.job.id, keyValue)
+        setSelected(detail)
+      }
+    } catch (e) { setError(e.message) }
+  }, [keyValue, selected?.job?.id])
+
+  usePolling(loadJobs, 4000)
+
+  const create = async (e) => {
+    e.preventDefault()
+    if (!query.trim()) return
+    setCreating(true); setError('')
+    try {
+      const d = await request('/api/v1/research/jobs', keyValue, {
+        method: 'POST',
+        body: JSON.stringify({ query: query.trim(), count: Number(count) || 25 })
+      })
+      setQuery('')
+      await loadJobs()
+      const detail = await request('/api/v1/research/jobs/' + d.job_id, keyValue)
+      setSelected(detail)
+    } catch (e) { setError(e.message) }
+    finally { setCreating(false) }
+  }
+
+  const openJob = async (id) => {
+    try { setSelected(await request('/api/v1/research/jobs/' + id, keyValue)) }
+    catch (e) { setError(e.message) }
+  }
+
+  return (
+    <section>
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">Author discovery</div>
+          <h1>Research</h1>
+          <p>Give the engine a real target. Nothing searches until you submit a query.</p>
+        </div>
+      </div>
+
+      <div className="panel research-compose">
+        <form onSubmit={create}>
+          <label>What authors do you want to find?</label>
+          <textarea
+            rows="4"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Example: emerging male fantasy authors in Canada, active in 2026, with official website and verified public professional email"
+          />
+          <div className="compose-row">
+            <div className="field-small">
+              <label>Target results</label>
+              <input type="number" min="1" max="50" value={count} onChange={e => setCount(e.target.value)} />
+            </div>
+            <div className="compose-hint">The engine filters duplicates, generic contacts, junk identities and high-saturation authors before saving results.</div>
+            <button className="button button-primary" disabled={creating || !query.trim()}>
+              {creating ? 'Queuing…' : 'Start research'}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {error && <div className="alert alert-error">{error}</div>}
+
+      <div className="research-layout">
+        <div className="panel jobs-panel">
+          <div className="panel-head"><div><span className="kicker">Live queue</span><h2>Research jobs</h2></div><button className="button button-quiet" onClick={loadJobs}>Refresh</button></div>
+          {!jobs.length ? <Empty title="No research jobs yet" body="Submit your first specific author search above." /> :
+            <div className="job-list">
+              {jobs.map(job => (
+                <button key={job.id} className={'job-row ' + (selected?.job?.id === job.id ? 'active' : '')} onClick={() => openJob(job.id)}>
+                  <div className="job-top"><Status value={job.status} /><span>#{job.id}</span></div>
+                  <strong>{short(job.query_text, 92)}</strong>
+                  <div className="job-meta">
+                    <span>{job.accepted || 0}/{job.requested_count} saved</span>
+                    <span>{job.checked || 0} checked</span>
+                    <span>{fmt(job.created_at)}</span>
+                  </div>
+                  {['queued','starting','running'].includes(job.status) && <div className="progress"><i style={{width: Math.min(92, Math.max(8, ((job.accepted || 0) / Math.max(1, job.requested_count)) * 100)) + '%'}} /></div>}
+                </button>
+              ))}
+            </div>}
+        </div>
+
+        <div className="panel job-detail">
+          {!selected ? <Empty title="Select a research job" body="Open a job to watch progress and inspect the qualified authors it produced." /> : (
+            <>
+              <div className="panel-head">
+                <div><span className="kicker">Research job #{selected.job.id}</span><h2>{short(selected.job.query_text, 78)}</h2></div>
+                <Status value={selected.job.status} />
+              </div>
+              <div className="job-summary-grid">
+                <Metric label="Requested" value={selected.job.requested_count} />
+                <Metric label="Saved" value={selected.job.accepted} />
+                <Metric label="Checked" value={selected.job.checked} />
+                <Metric label="Duplicates" value={selected.job.duplicates} />
+              </div>
+              <div className="progress-message">{selected.job.progress_text || 'Waiting for worker…'}</div>
+              {selected.job.error && <div className="alert alert-error">{selected.job.error}</div>}
+              <div className="result-stack">
+                {(selected.results || []).map(author => (
+                  <div className="result-card" key={author.id}>
+                    <div>
+                      <strong>{author.name}</strong>
+                      <span>{[author.country, author.genre].filter(Boolean).join(' · ') || 'Author'}</span>
+                    </div>
+                    <div className="result-contact">
+                      {author.email && <a href={'mailto:' + author.email}>{author.email}</a>}
+                      {author.website && <a href={author.website} target="_blank" rel="noreferrer">Website ↗</a>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {selected.job.status === 'completed' && !(selected.results || []).length &&
+                <Empty title="No new authors saved" body="Candidates may have failed verification or already existed in the shared database." />}
+            </>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function Authors({ keyValue }) {
+  const [authors, setAuthors] = useState([])
+  const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    try {
+      const q = search.trim() ? '&search=' + encodeURIComponent(search.trim()) : ''
+      const d = await request('/api/v1/authors?limit=250' + q, keyValue)
+      setAuthors(d.authors || []); setError('')
+    } catch (e) { setError(e.message) }
+  }, [keyValue, search])
+  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t) }, [load])
+
+  return (
+    <section>
+      <div className="page-head">
+        <div><div className="eyebrow">Verified database</div><h1>Authors</h1><p>Qualified authors already claimed by your workspace.</p></div>
+        <input className="search-box" placeholder="Search authors…" value={search} onChange={e => setSearch(e.target.value)} />
+      </div>
+      {error && <div className="alert alert-error">{error}</div>}
+      <div className="panel table-panel">
+        {!authors.length ? <Empty title="No matching authors" body="Run a research job to build your verified author database." /> :
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Author</th><th>Country</th><th>Genre</th><th>Public email</th><th>Website</th><th>Activity</th></tr></thead>
+            <tbody>
+              {authors.map(a => <tr key={a.id}>
+                <td><strong>{a.name}</strong><small>#{a.id}</small></td>
+                <td>{a.country || '—'}</td>
+                <td>{a.genre || '—'}</td>
+                <td>{a.email ? <a href={'mailto:' + a.email}>{a.email}</a> : '—'}</td>
+                <td>{a.website ? <a target="_blank" rel="noreferrer" href={a.website}>Open ↗</a> : '—'}</td>
+                <td title={a.recent_activity}>{short(a.recent_activity, 90) || '—'}</td>
+              </tr>)}
+            </tbody>
+          </table>
+        </div>}
+      </div>
+    </section>
+  )
+}
+
+function Connections({ keyValue }) {
+  const [items, setItems] = useState([])
+  const [status, setStatus] = useState('ready')
+  const [linkedin, setLinkedin] = useState('')
+  const [focus, setFocus] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      const d = await request('/api/v1/connections?status=' + encodeURIComponent(status) + '&limit=150', keyValue)
+      setItems(d.connections || []); setError('')
+    } catch (e) { setError(e.message) }
+  }, [keyValue, status])
+  usePolling(load, 7000)
+
+  const setup = async e => {
+    e.preventDefault(); setBusy(true); setError(''); setNotice('')
+    try {
+      await request('/api/v1/connections/setup', keyValue, {
+        method:'POST', body: JSON.stringify({ linkedin_url: linkedin.trim(), focus: focus.trim() })
+      })
+      setNotice('Connection Intelligence is active. Background research will begin filling your queue.')
+      setLinkedin('')
+      await load()
+    } catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+
+  const update = async (id, next) => {
+    try {
+      await request('/api/v1/connections/' + id + '/status', keyValue, {
+        method:'POST', body: JSON.stringify({ status: next })
+      })
+      setItems(v => v.filter(x => x.assignment_id !== id))
+    } catch (e) { setError(e.message) }
+  }
+
+  return (
+    <section>
+      <div className="page-head">
+        <div><div className="eyebrow">LinkedIn network intelligence</div><h1>Connections</h1><p>Background-researched profiles, scored before they enter your queue.</p></div>
+        <select className="select" value={status} onChange={e => setStatus(e.target.value)}>
+          <option value="ready">Ready / saved</option>
+          <option value="connected">Connected</option>
+          <option value="skipped">Skipped</option>
+          <option value="not_relevant">Not relevant</option>
+        </select>
+      </div>
+
+      <div className="panel connection-setup">
+        <div><span className="kicker">Set your targeting profile</span><h2>Connection Intelligence setup</h2><p>Public location evidence in Nigeria is excluded by default. The system does not infer nationality from names or photos.</p></div>
+        <form onSubmit={setup}>
+          <input placeholder="https://www.linkedin.com/in/your-profile" value={linkedin} onChange={e => setLinkedin(e.target.value)} />
+          <input placeholder="Optional focus: publishing founders, authors, literary agents…" value={focus} onChange={e => setFocus(e.target.value)} />
+          <button className="button button-primary" disabled={busy || !linkedin.trim()}>{busy ? 'Setting up…' : 'Enable / update'}</button>
+        </form>
+      </div>
+      {notice && <div className="alert alert-success">{notice}</div>}
+      {error && <div className="alert alert-error">{error}</div>}
+
+      {!items.length ? <div className="panel"><Empty title={status === 'ready' ? 'No ready profiles yet' : 'Nothing in this status'} body={status === 'ready' ? 'Once Connection Intelligence is configured, Render keeps researching and replenishing this queue in the background.' : 'Profiles will appear here as their status changes.'} /></div> :
+      <div className="connection-grid">
+        {items.map(p => (
+          <div className="connection-card" key={p.assignment_id}>
+            <div className="connection-score">{p.fit_score}</div>
+            <div className="connection-main">
+              <div className="connection-title"><div><strong>{p.name}</strong><span>{p.headline || p.company || 'LinkedIn professional'}</span></div><Status value={p.status} /></div>
+              <div className="connection-meta"><span>{p.country || 'Location unavailable'}</span>{p.company && <span>{p.company}</span>}</div>
+              <p>{p.fit_reason || 'Relevant professional fit based on your current connection criteria.'}</p>
+              <div className="connection-actions">
+                <a className="button button-quiet" href={p.profile_url} target="_blank" rel="noreferrer">Open LinkedIn ↗</a>
+                {['ready','saved'].includes(p.status) && <>
+                  <button className="button button-good" onClick={() => update(p.assignment_id,'connected')}>Mark connected</button>
+                  <button className="button button-quiet" onClick={() => update(p.assignment_id,'save')}>Save</button>
+                  <button className="button button-quiet" onClick={() => update(p.assignment_id,'skip')}>Skip</button>
+                  <button className="button button-danger-quiet" onClick={() => update(p.assignment_id,'not_relevant')}>Not relevant</button>
+                </>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>}
+    </section>
+  )
+}
+
+function System({ keyValue }) {
+  const [source, setSource] = useState(null)
+  const [health, setHealth] = useState(null)
+  const [error, setError] = useState('')
+  const load = useCallback(async () => {
+    try {
+      const [a,b] = await Promise.all([
+        request('/api/v1/source-status', keyValue),
+        request('/api/v1/health', '')
+      ])
+      setSource(a); setHealth(b); setError('')
+    } catch(e){ setError(e.message) }
+  }, [keyValue])
+  usePolling(load, 10000)
+
+  return (
+    <section>
+      <div className="page-head">
+        <div><div className="eyebrow">Infrastructure</div><h1>System</h1><p>What the background research engine is actually doing.</p></div>
+        <button className="button button-quiet" onClick={load}>Refresh</button>
+      </div>
+      {error && <div className="alert alert-error">{error}</div>}
+      <div className="metric-grid">
+        <Metric label="API" value={health?.ok ? 'Online' : 'Checking'} sub={'v' + (health?.version || '…')} />
+        <Metric label="Active demands" value={source?.demands || 0} sub="Created by real queries" />
+        <Metric label="Indexed sources" value={source?.sources || 0} sub="Reusable source pages" />
+        <Metric label="Pre-verified" value={source?.verified || 0} sub="Ready reservoir candidates" />
+      </div>
+      <div className="panel">
+        <span className="kicker">Architecture</span>
+        <h2>Vercel is the interface. Render does the long-running work.</h2>
+        <div className="architecture">
+          <div><strong>Vercel</strong><span>Dashboard UI</span></div><b>→</b>
+          <div><strong>Render API</strong><span>Queue + workers</span></div><b>→</b>
+          <div><strong>Neon</strong><span>Shared database</span></div>
+        </div>
+        <p className="muted">Telegram stays connected to the same backend as a lightweight mobile companion. Authors and connections seen here are the same records used by the bot.</p>
+      </div>
+    </section>
+  )
+}
+
+const NAV = [
+  ['dashboard','Overview','⌂'],
+  ['research','Research','⌕'],
+  ['authors','Authors','A'],
+  ['connections','Connections','↗'],
+  ['system','System','⚙'],
+]
+
+export default function App() {
+  const [keyValue, setKeyValue] = useState(() => sessionStorage.getItem('authorScoutKey') || '')
+  const [session, setSession] = useState(null)
+  const [checking, setChecking] = useState(Boolean(keyValue))
+  const [loginError, setLoginError] = useState('')
+  const [tab, setTab] = useState('dashboard')
+
+  const verify = useCallback(async (key) => {
+    setChecking(true); setLoginError('')
+    try {
+      const s = await request('/api/v1/session', key)
+      sessionStorage.setItem('authorScoutKey', key)
+      setKeyValue(key); setSession(s)
+    } catch(e) {
+      sessionStorage.removeItem('authorScoutKey')
+      setKeyValue(''); setSession(null); setLoginError(e.message)
+    } finally { setChecking(false) }
+  }, [])
+
+  useEffect(() => { if (keyValue && !session) verify(keyValue) }, [])
+
+  const logout = () => {
+    sessionStorage.removeItem('authorScoutKey')
+    setKeyValue(''); setSession(null); setTab('dashboard')
+  }
+
+  if (!session) return <Login onLogin={verify} busy={checking} error={loginError} />
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">AS</div>
+          <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
+        </div>
+        <nav>
+          {NAV.map(([id,label,icon]) => <button key={id} onClick={() => setTab(id)} className={tab === id ? 'active' : ''}><span>{icon}</span>{label}</button>)}
+        </nav>
+        <div className="sidebar-foot">
+          <div className="workspace-card">
+            <span>Workspace</span>
+            <strong>{session.team?.name}</strong>
+            <small>{session.user?.first_name || session.user?.username || 'Team access'}</small>
+          </div>
+          <button className="logout" onClick={logout}>Sign out</button>
+        </div>
+      </aside>
+      <main>
+        <div className="mobile-top">
+          <div className="brand-mark">AS</div>
+          <select value={tab} onChange={e => setTab(e.target.value)}>
+            {NAV.map(([id,label]) => <option key={id} value={id}>{label}</option>)}
+          </select>
+          <button onClick={logout}>Exit</button>
+        </div>
+        {tab === 'dashboard' && <Dashboard keyValue={keyValue} session={session} />}
+        {tab === 'research' && <Research keyValue={keyValue} />}
+        {tab === 'authors' && <Authors keyValue={keyValue} />}
+        {tab === 'connections' && <Connections keyValue={keyValue} />}
+        {tab === 'system' && <System keyValue={keyValue} />}
+      </main>
+    </div>
+  )
+}
