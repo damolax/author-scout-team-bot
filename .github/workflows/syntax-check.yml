@@ -1,4 +1,4 @@
-name: Python syntax check
+name: Python and web build check
 
 on:
   push:
@@ -15,3 +15,18 @@ jobs:
           python-version: "3.12"
       - name: Compile Python files
         run: python -m py_compile bot_main.py bot_main_v3.py
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install web dependencies
+        run: npm install
+      - name: Build Vite dashboard
+        run: npm run build
