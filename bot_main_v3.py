@@ -736,121 +736,171 @@ async def fast_research(name: str, country: str = "", genre: str = "", hint: str
 
 
 async def fast_find_authors(spec, progress=None):
-    count = spec["count"]
-    country = spec.get("country", "")
-    genre = spec.get("genre", "")
-    gender = spec.get("gender", "any")
-    name_filter = spec.get("name", "")
-    language = spec.get("language", "")
-    year = spec.get("year", "")
-    free_query = spec.get("query", "")
-    require_email = spec.get("require_email", True)
-    require_website = spec.get("require_website", True)
-    country_term = _COUNTRY_ALIASES.get((country or "").strip().lower(), country)
+    count=int(spec["count"])
+    country=spec.get("country","")
+    genre=spec.get("genre","")
+    gender=spec.get("gender","any")
+    name_filter=spec.get("name","")
+    language=spec.get("language","")
+    year=spec.get("year","")
+    free_query=spec.get("query","")
+    require_email=spec.get("require_email",True)
+    require_website=spec.get("require_website",True)
+    country_term=_COUNTRY_ALIASES.get((country or "").strip().lower(),country)
+    await asyncio.to_thread(_record_search_demand,spec)
 
-    intent_parts = []
-    if name_filter: intent_parts.append(f'"{name_filter}"')
-    if free_query: intent_parts.append(free_query)
-    if country_term: intent_parts.append(country_term)
-    if genre: intent_parts.append(genre)
-    if language: intent_parts.append(language)
-    if gender in {"male", "female"}: intent_parts.append(gender)
-    base = " ".join(dict.fromkeys([x.strip() for x in intent_parts if x.strip()])).strip() or "author"
-    activity_year = year or str(legacy.YEAR)
-    queries = [
+    intent_parts=[]
+    if name_filter:intent_parts.append(f'"{name_filter}"')
+    if free_query:intent_parts.append(free_query)
+    if country_term:intent_parts.append(country_term)
+    if genre:intent_parts.append(genre)
+    if language:intent_parts.append(language)
+    if gender in {"male","female"}:intent_parts.append(gender)
+    base=" ".join(dict.fromkeys([x.strip() for x in intent_parts if x.strip()])).strip() or "author"
+    activity_year=year or str(legacy.YEAR)
+    web_queries=[
         f'{base} author official website contact email',
         f'{base} writer novelist official site',
-        f'{base} author {activity_year} release event',
+        f'{base} author {activity_year} release event'
     ]
 
-    started = time.monotonic()
+    started=time.monotonic()
+    existing_rows=await asyncio.to_thread(legacy.rows,"SELECT name,country FROM prospects")
+    existing_keys={_pool_key(r.get("name") or "",r.get("country") or "") for r in existing_rows}
+    existing_names={_norm_author_name(r.get("name") or "") for r in existing_rows}
+
+    pool=await asyncio.to_thread(_pool_candidates,spec,max(count*10,80))
+    pool=[p for p in pool if p.get("candidate_key") not in existing_keys and _norm_author_name(p.get("name") or "") not in existing_names]
+
+    out=[];checked=0;with_email=0;with_website=0;raw_results=0;reservoir_hits=0
+    accepted_names=set();queries_used=["NEON_AUTHOR_RESERVOIR"]
     if progress:
-        await progress(f"⚡ <b>Fast scout started</b>\nRunning discovery routes together for: {legacy.esc(base)}")
-    result_sets = await asyncio.gather(*(fast_search(q, max(12, count * 2)) for q in queries), return_exceptions=True)
-    seen, cands = set(), []
-    raw_results = 0
-    # One database read replaces one duplicate query per candidate.
-    if country_term:
-        existing_rows = await asyncio.to_thread(legacy.rows,
-            "SELECT name FROM prospects WHERE lower(country)=lower(:c)", c=country_term)
-    else:
-        existing_rows = await asyncio.to_thread(legacy.rows, "SELECT name FROM prospects")
-    existing_names = {re.sub(r"[^a-z0-9]", "", (r.get("name") or "").lower()) for r in existing_rows}
-    for rs in result_sets:
-        if isinstance(rs, Exception):
-            continue
-        raw_results += len(rs)
-        for r in rs:
-            n = legacy.cand(r.get("title", ""), r.get("snippet", ""))
-            if not n:
-                continue
-            if name_filter:
-                wanted = [x.lower() for x in re.findall(r"[A-Za-zÀ-ÿ'’-]+", name_filter)]
-                if wanted and not all(x in n.lower() for x in wanted):
-                    continue
-            k = re.sub(r"[^a-z0-9]", "", n.lower())
-            if not k or k in seen:
-                continue
-            # Reject globally-known duplicate identities before network verification.
-            if k in existing_names:
-                continue
-            seen.add(k)
-            cands.append((n, r.get("url") or ""))
+        ready=sum(1 for p in pool if p.get("status")=="verified")
+        await progress(
+            f"⚡ <b>Reservoir-first scout</b>\\n"
+            f"Market: {legacy.esc(base)}\\n"
+            f"Stored candidates available: <b>{len(pool)}</b>\\n"
+            f"Already pre-verified: <b>{ready}</b>"
+        )
 
-    max_check = min(len(cands), max(count * 6, 30))
-    if progress:
-        await progress(f"📋 <b>{len(cands)} new candidate identities</b>\nVerifying public website + email with up to {AUTHOR_RESEARCH_CONCURRENCY} concurrent workers.")
+    remaining=[]
+    for p in pool:
+        if len(out)>=count:break
+        payload={}
+        if p.get("status")=="verified" and p.get("verified_payload"):
+            try:payload=json.loads(p["verified_payload"] or "{}")
+            except Exception:payload={}
+        if payload:
+            checked+=1
+            if payload.get("website"):with_website+=1
+            if payload.get("email"):with_email+=1
+            if require_website and not payload.get("website"):continue
+            if require_email and not payload.get("email"):continue
+            nk=_norm_author_name(payload.get("name") or p.get("name") or "")
+            if not nk or nk in accepted_names:continue
+            accepted_names.add(nk);out.append(payload);reservoir_hits+=1
+            legacy.execq("UPDATE author_candidate_pool SET times_selected=times_selected+1,updated_at=:t WHERE id=:i",t=legacy.iso(),i=p["id"])
+        else:
+            remaining.append(p)
 
-    checked = with_email = with_website = 0
-    out = []
-    sem = asyncio.Semaphore(AUTHOR_RESEARCH_CONCURRENCY)
+    if len(out)>=count:
+        seconds=time.monotonic()-started
+        return out[:count],{
+            "raw_results":0,"candidates":len(pool),"checked":checked,"with_email":with_email,
+            "with_website":with_website,"query":base,"queries":queries_used,
+            "elapsed_seconds":round(seconds,2),"reservoir_hits":reservoir_hits,"web_searches":0
+        }
 
-    async def verify_one(n, h):
+    sem=asyncio.Semaphore(AUTHOR_RESEARCH_CONCURRENCY)
+    async def verify_pool(p):
         async with sem:
-            d = await _contact_research(n, country_term, genre, h)
-            # Fail fast before spending another search on activity.
-            if require_website and not d.get("website"):
-                return d, False
-            if require_email and not d.get("email"):
-                return d, False
-            d = await _enrich_activity(d)
-            return d, True
+            d=await _contact_research(p["name"],country_term or p.get("country") or "",genre or p.get("genre") or "",p.get("discovery_url") or "")
+            passed=(not require_website or bool(d.get("website"))) and (not require_email or bool(d.get("email")))
+            if passed:d=await _enrich_activity(d)
+            await asyncio.to_thread(_mark_pool_verified,int(p["id"]),d,passed)
+            return p,d,passed
 
-    tasks = [asyncio.create_task(verify_one(n, h)) for n, h in cands[:max_check]]
-    last_progress = 0
-    try:
-        for fut in asyncio.as_completed(tasks):
-            try:
-                d, qualified = await fut
+    pool_tasks=[asyncio.create_task(verify_pool(p)) for p in remaining[:max(count*6,30)]]
+    if pool_tasks:
+        for fut in asyncio.as_completed(pool_tasks):
+            try:p,d,passed=await fut
             except Exception:
-                checked += 1
-                continue
-            checked += 1
-            if d.get("website"): with_website += 1
-            if d.get("email"): with_email += 1
-            if qualified:
-                out.append(d)
-            if progress and (checked - last_progress >= 5 or len(out) >= count):
-                last_progress = checked
-                await progress(
-                    f"🔬 <b>High-speed verification</b>\nChecked: {checked}/{max_check}\n"
-                    f"Accepted: <b>{len(out)}</b> / {count}\nWebsites: {with_website}\nPublic emails: {with_email}"
-                )
-            if len(out) >= count:
-                break
-    finally:
-        if len(out) >= count:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+                checked+=1;continue
+            checked+=1
+            if d.get("website"):with_website+=1
+            if d.get("email"):with_email+=1
+            if passed:
+                nk=_norm_author_name(d.get("name") or "")
+                if nk and nk not in accepted_names:
+                    accepted_names.add(nk);out.append(d);reservoir_hits+=1
+                    legacy.execq("UPDATE author_candidate_pool SET times_selected=times_selected+1,updated_at=:t WHERE id=:i",t=legacy.iso(),i=p["id"])
+            if progress and (checked%5==0 or len(out)>=count):
+                await progress(f"🔬 <b>Reservoir verification</b>\\nChecked: {checked}\\nAccepted: <b>{len(out)}</b> / {count}")
+            if len(out)>=count:break
+        if len(out)>=count:
+            for task in pool_tasks:
+                if not task.done():task.cancel()
+        await asyncio.gather(*pool_tasks,return_exceptions=True)
 
-    seconds = time.monotonic() - started
-    print(f"FAST_FIND_DONE seconds={seconds:.2f} raw={raw_results} candidates={len(cands)} checked={checked} accepted={len(out)}")
-    return out[:count], {
-        "raw_results": raw_results, "candidates": len(cands), "checked": checked,
-        "with_email": with_email, "with_website": with_website, "query": base, "queries": queries,
-        "elapsed_seconds": round(seconds, 2),
+    if len(out)>=count:
+        seconds=time.monotonic()-started
+        return out[:count],{
+            "raw_results":0,"candidates":len(pool),"checked":checked,"with_email":with_email,
+            "with_website":with_website,"query":base,"queries":queries_used,
+            "elapsed_seconds":round(seconds,2),"reservoir_hits":reservoir_hits,"web_searches":0
+        }
+
+    if progress:
+        await progress(f"🌐 <b>Reservoir needs {count-len(out)} more</b>\\nRunning fresh discovery while saving new identities back into Neon.")
+    result_sets=await asyncio.gather(*(fast_search(q,max(12,count*2)) for q in web_queries),return_exceptions=True)
+    queries_used.extend(web_queries)
+    fresh=[]
+    fresh_seen=set()
+    for q,rs in zip(web_queries,result_sets):
+        if isinstance(rs,Exception):continue
+        raw_results+=len(rs)
+        for r in rs:
+            n=legacy.cand(r.get("title",""),r.get("snippet",""))
+            if not n:continue
+            if name_filter:
+                wanted=[x.lower() for x in re.findall(r"[A-Za-zÀ-ÿ'’-]+",name_filter)]
+                if wanted and not all(x in n.lower() for x in wanted):continue
+            nk=_norm_author_name(n)
+            if not nk or nk in accepted_names or nk in existing_names or nk in fresh_seen:continue
+            pid=await asyncio.to_thread(_upsert_pool_candidate,n,country_term,genre,r.get("url") or "",r.get("url") or "",
+                                        "search_result",q,r.get("snippet") or "")
+            if not pid:continue
+            fresh_seen.add(nk)
+            fresh.append({"id":pid,"name":n,"country":country_term,"genre":genre,"discovery_url":r.get("url") or ""})
+
+    fresh_tasks=[asyncio.create_task(verify_pool(p)) for p in fresh[:max(count*6,30)]]
+    for fut in asyncio.as_completed(fresh_tasks):
+        try:p,d,passed=await fut
+        except Exception:
+            checked+=1;continue
+        checked+=1
+        if d.get("website"):with_website+=1
+        if d.get("email"):with_email+=1
+        if passed:
+            nk=_norm_author_name(d.get("name") or "")
+            if nk and nk not in accepted_names:
+                accepted_names.add(nk);out.append(d)
+                legacy.execq("UPDATE author_candidate_pool SET times_selected=times_selected+1,updated_at=:t WHERE id=:i",t=legacy.iso(),i=p["id"])
+        if progress and (checked%5==0 or len(out)>=count):
+            await progress(f"🚀 <b>Fresh verification</b>\\nChecked: {checked}\\nAccepted: <b>{len(out)}</b> / {count}\\nNew identities stored: {len(fresh)}")
+        if len(out)>=count:break
+    if len(out)>=count:
+        for task in fresh_tasks:
+            if not task.done():task.cancel()
+    await asyncio.gather(*fresh_tasks,return_exceptions=True)
+
+    seconds=time.monotonic()-started
+    print(f"RESERVOIR_FIND_DONE seconds={seconds:.2f} pool={len(pool)} raw={raw_results} fresh={len(fresh)} checked={checked} accepted={len(out)}")
+    return out[:count],{
+        "raw_results":raw_results,"candidates":len(pool)+len(fresh),"checked":checked,
+        "with_email":with_email,"with_website":with_website,"query":base,"queries":queries_used,
+        "elapsed_seconds":round(seconds,2),"reservoir_hits":reservoir_hits,
+        "web_searches":len(web_queries) if raw_results else 0
     }
 
 
