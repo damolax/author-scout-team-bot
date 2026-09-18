@@ -654,11 +654,6 @@ async def startup():
     except Exception:
         print(f"DB_DIAGNOSTIC configured={bool(raw_db)} scheme=unknown host= database=")
     init_db()
-    try:
-        _self=await search("Saudi Arabia author official website contact email",5)
-        print(f"SEARCH_SELFTEST ok={bool(_self)} count={len(_self)} sample={(_self[0].get('title','')[:80] if _self else '')}")
-    except Exception as e:
-        print(f"SEARCH_SELFTEST_ERROR {type(e).__name__}: {e}")
     if TOKEN and BASE and WEBHOOK_SECRET:
         try:
             me=await tg("getMe")
