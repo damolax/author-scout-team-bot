@@ -4,6 +4,6 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn bot_main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn bot_main_v3:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: true
