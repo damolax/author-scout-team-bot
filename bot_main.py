@@ -218,53 +218,187 @@ async def research(name,country="",genre="",hint=""):
     if act and act[0]["url"]:sources.append(act[0]["url"])
     return {"name":name,"country":country,"genre":genre,"website":website,"email":emailv,"email_source_url":source,"verification_status":verified,"bio":bio,"books":"","recent_activity":activity,"source_urls":list(dict.fromkeys(sources))}
 
-async def find_authors(country,genre,gender,count,require_email,progress=None):
-    country_term={"uae":"United Arab Emirates","uk":"United Kingdom","usa":"United States","us":"United States"}.get((country or "").strip().lower(),country)
-    genre_term=f" {genre}" if genre else ""
-    gender_term=f" {gender} author" if gender in {"male","female"} else ""
+def _yes(v,default=True):
+    if v is None:return default
+    return str(v).strip().lower() not in {"0","no","false","off","optional","none","noemail"}
+
+def parse_find(a):
+    raw=(a or "").strip()
+    spec={
+        "count":10,"country":"","genre":"","gender":"any","name":"",
+        "language":"","year":"","query":"","require_email":True,
+        "require_website":True,"raw":raw
+    }
+    if not raw:
+        spec["query"]="authors"
+        return spec
+
+    # Explicit key=value or key:value filters can appear in any order.
+    keymap={
+        "count":"count","n":"count","country":"country","location":"country",
+        "genre":"genre","gender":"gender","sex":"gender","name":"name",
+        "author":"name","language":"language","lang":"language","year":"year",
+        "email":"email","website":"website","site":"website","query":"query","q":"query"
+    }
+    explicit_spans=[]
+    pattern=re.compile(r'(?i)\\b(count|n|country|location|genre|gender|sex|name|author|language|lang|year|email|website|site|query|q)\\s*[:=]\\s*("[^"]+"|\'[^\']+\'|[^|,;]+)')
+    for m in pattern.finditer(raw):
+        k=keymap[m.group(1).lower()]
+        v=m.group(2).strip().strip('"\' ').strip()
+        explicit_spans.append(m.span())
+        if k=="count":
+            try:spec["count"]=min(max(int(v),1),MAX_FIND)
+            except:pass
+        elif k=="email":
+            spec["require_email"]=_yes(v,True)
+        elif k=="website":
+            spec["require_website"]=_yes(v,True)
+        elif k=="gender":
+            spec["gender"]=v.lower()
+        else:
+            spec[k]=v
+
+    # Remove explicit filters from the free-text intent.
+    cleaned=raw
+    for s,e in reversed(explicit_spans):
+        cleaned=cleaned[:s]+" "+cleaned[e:]
+    cleaned=re.sub(r'\\s+',' ',cleaned).strip(" |,;")
+
+    # Backward-compatible pipe format:
+    # /find 5 | Saudi Arabia | Karim | male | email
+    parts=[x.strip() for x in raw.split("|") if x.strip()]
+    positional=not explicit_spans and len(parts)>1
+    if positional:
+        try:
+            spec["count"]=min(max(int(parts[0]),1),MAX_FIND); parts=parts[1:]
+        except:pass
+        if parts:
+            spec["country"]=parts[0]
+        if len(parts)>1:
+            spec["query"]=parts[1]
+        for x in parts[2:]:
+            xl=x.lower()
+            if xl in {"male","female","any"}:
+                spec["gender"]=xl
+            elif xl in {"email","email required","verified email"}:
+                spec["require_email"]=True
+            elif xl in {"optional","noemail","no email","email optional"}:
+                spec["require_email"]=False
+            elif xl in {"website","site","website required"}:
+                spec["require_website"]=True
+            elif xl in {"no website","website optional"}:
+                spec["require_website"]=False
+            else:
+                spec["query"]=(spec["query"]+" "+x).strip()
+    else:
+        # Leading number is treated as requested count.
+        m=re.match(r'^\\s*(\\d{1,2})\\s+(.*)$',cleaned)
+        if m:
+            spec["count"]=min(max(int(m.group(1)),1),MAX_FIND)
+            cleaned=m.group(2).strip()
+        if cleaned and not spec["query"]:
+            spec["query"]=cleaned
+
+    # Natural-language convenience: "Karim in Saudi Arabia" or "authors named Karim in Saudi Arabia".
+    q=spec["query"] or cleaned
+    m=re.search(r'(?i)\\b(?:authors?|writers?)\\s+(?:named|called)\\s+([A-Za-zÀ-ÿ\'’-]+)(?:\\s+in\\s+(.+))?$',q)
+    if m:
+        if not spec["name"]:spec["name"]=m.group(1).strip()
+        if m.group(2) and not spec["country"]:spec["country"]=m.group(2).strip()
+    else:
+        m=re.match(r"(?i)^([A-Za-zÀ-ÿ'’-]{2,30})\\s+in\\s+(.{2,60})$",q.strip())
+        if m and not any(w in m.group(1).lower() for w in {"author","writer","book"}):
+            if not spec["name"]:spec["name"]=m.group(1).strip()
+            if not spec["country"]:spec["country"]=m.group(2).strip()
+
+    return spec
+
+async def find_authors(spec,progress=None):
+    count=spec["count"]
+    country=spec.get("country","")
+    genre=spec.get("genre","")
+    gender=spec.get("gender","any")
+    name_filter=spec.get("name","")
+    language=spec.get("language","")
+    year=spec.get("year","")
+    free_query=spec.get("query","")
+    require_email=spec.get("require_email",True)
+    require_website=spec.get("require_website",True)
+
+    aliases={"uae":"United Arab Emirates","uk":"United Kingdom","usa":"United States","us":"United States","ksa":"Saudi Arabia","saudi":"Saudi Arabia"}
+    country_term=aliases.get((country or "").strip().lower(),country)
+
+    intent_parts=[]
+    if name_filter:intent_parts.append(f'"{name_filter}"')
+    if free_query:intent_parts.append(free_query)
+    if country_term:intent_parts.append(country_term)
+    if genre:intent_parts.append(genre)
+    if language:intent_parts.append(language)
+    if gender in {"male","female"}:intent_parts.append(gender)
+    base=" ".join(dict.fromkeys([x.strip() for x in intent_parts if x.strip()])).strip() or "author"
+
+    activity_year=year or str(YEAR)
     queries=[
-        f'{country_term}{genre_term} author official website contact',
-        f'{country_term}{genre_term} writer novelist books contact',
-        f'{country_term}{genre_term}{gender_term} author {YEAR} book'
+        f'{base} author official website contact email',
+        f'{base} writer novelist books official site',
+        f'{base} author {activity_year} release event newsletter'
     ]
-    seen=set(); cands=[]; raw_results=0
+
+    seen=set();cands=[];raw_results=0
     for qi,q in enumerate(queries,1):
         if progress:
-            await progress(f"🔎 <b>Search pass {qi}/3</b>\nLooking across public web results for {esc(country)} authors…\n\nCandidates collected: <b>{len(cands)}</b>")
-        rs=await search(q,max(15,count*2))
+            await progress(
+                f"🔎 <b>Search pass {qi}/3</b>\\n"
+                f"Query: {esc(base)}\\n\\n"
+                f"Candidates collected: <b>{len(cands)}</b>"
+            )
+        rs=await search(q,max(15,count*3))
         raw_results+=len(rs)
-        print(f"FIND_PROGRESS pass={qi} raw_results={len(rs)} candidates_before={len(cands)}")
+        print(f"FIND_PROGRESS pass={qi} raw_results={len(rs)} query={q[:180]}")
         for r in rs:
-            n=cand(r["title"],r["snippet"]); k=re.sub("[^a-z0-9]","",n.lower())
-            if n and k not in seen:
+            n=cand(r["title"],r["snippet"])
+            if not n:continue
+            if name_filter:
+                wanted=[x.lower() for x in re.findall(r"[A-Za-zÀ-ÿ'’-]+",name_filter)]
+                nl=n.lower()
+                if wanted and not all(x in nl for x in wanted):
+                    continue
+            k=re.sub("[^a-z0-9]","",n.lower())
+            if k and k not in seen:
                 seen.add(k);cands.append((n,r["url"]))
+
     if progress:
-        await progress(f"📋 <b>{len(cands)} candidate names found</b>\nNow checking official websites and public professional emails…\n\nRaw search results checked: <b>{raw_results}</b>")
-    out=[]; checked=0; with_email=0
-    max_check=min(len(cands),max(count*4,20))
+        await progress(
+            f"📋 <b>{len(cands)} candidate names found</b>\\n"
+            f"Now checking official websites and public contact details…\\n\\n"
+            f"Raw search results checked: <b>{raw_results}</b>"
+        )
+
+    out=[];checked=0;with_email=0;with_website=0
+    max_check=min(len(cands),max(count*6,30))
     for n,h in cands[:max_check]:
         checked+=1
         if progress and (checked==1 or checked%2==0):
-            await progress(f"🔬 <b>Verification in progress</b>\nCandidate {checked}/{max_check}: {esc(n)}\nVerified matches so far: <b>{len(out)}</b>\nPublic emails found: <b>{with_email}</b>")
-        d=await research(n,country,genre,h)
-        if d.get("email"): with_email+=1
-        if require_email and not d["email"]:
-            continue
+            await progress(
+                f"🔬 <b>Verification in progress</b>\\n"
+                f"Candidate {checked}/{max_check}: {esc(n)}\\n"
+                f"Accepted so far: <b>{len(out)}</b>\\n"
+                f"Websites found: <b>{with_website}</b>\\n"
+                f"Public emails found: <b>{with_email}</b>"
+            )
+        d=await research(n,country_term,genre,h)
+        if d.get("website"):with_website+=1
+        if d.get("email"):with_email+=1
+        if require_website and not d.get("website"):continue
+        if require_email and not d.get("email"):continue
         out.append(d)
-        if len(out)>=count:
-            break
-    print(f"FIND_DONE raw_results={raw_results} candidates={len(cands)} checked={checked} with_email={with_email} accepted={len(out)}")
-    return out,{"raw_results":raw_results,"candidates":len(cands),"checked":checked,"with_email":with_email}
+        if len(out)>=count:break
 
-def parse_find(a):
-    p=[x.strip() for x in a.split("|") if x.strip()]; n=10
-    try:n=int(p[0]);p=p[1:]
-    except:pass
-    country=p[0] if p else "any country"
-    genre=p[1] if len(p)>1 else ""
-    gender=p[2].lower() if len(p)>2 else "any"
-    require_email=not(len(p)>3 and p[3].lower() in {"optional","no","noemail"})
-    return min(max(n,1),MAX_FIND),country,genre,gender,require_email
+    print(f"FIND_DONE raw_results={raw_results} candidates={len(cands)} checked={checked} websites={with_website} with_email={with_email} accepted={len(out)} query={base[:180]}")
+    return out,{
+        "raw_results":raw_results,"candidates":len(cands),"checked":checked,
+        "with_email":with_email,"with_website":with_website,"query":base
+    }
 
 def enc(v):
     if not fernet:raise RuntimeError("TOKEN_ENCRYPTION_KEY missing")
@@ -413,7 +547,13 @@ async def handle(up):
     if not uid or not chat:return
     uid=ensure_user(u);t=team(uid)
     if m.get("document"):return await import_sheet(chat,uid,m["document"])
-    txt=m.get("text") or "";parts=txt.split(maxsplit=1);cmd=parts[0].split("@")[0].lower() if txt.startswith("/") else "";arg=parts[1] if len(parts)>1 else ""
+    txt=(m.get("text") or "").strip();parts=txt.split(maxsplit=1);cmd=parts[0].split("@")[0].lower() if txt.startswith("/") else "";arg=parts[1] if len(parts)>1 else ""
+    if not cmd and txt:
+        natural=re.match(r"(?i)^(?:find|search|scout)\\s+(.+)$",txt)
+        if natural:
+            cmd="/find";arg=natural.group(1).strip()
+        elif t:
+            cmd="/find";arg=txt
     if cmd in {"/start","/help"}:return await send(chat,HELP)
     if cmd=="/newteam":
         if t:return await send(chat,"You are already in a team.")
@@ -432,23 +572,35 @@ async def handle(up):
     if cmd=="/find":
         t=team(uid)
         if not t:return await send(chat,"Join/create a team first.")
-        n,country_name,g,gender,req=parse_find(arg)
-        status=await send(chat,f"🚀 <b>Scout started</b>\nTarget: {n} new authors\nCountry: {esc(country_name)}\nGenre: {esc(g or 'any')}\nEmail required: {'yes' if req else 'no'}")
+        spec=parse_find(arg)
+        status=await send(
+            chat,
+            f"🚀 <b>Scout started</b>\n"
+            f"Target: {spec['count']} new authors\n"
+            f"Search: {esc(spec.get('query') or spec.get('name') or 'authors')}\n"
+            f"Country: {esc(spec.get('country') or 'any')}\n"
+            f"Genre: {esc(spec.get('genre') or 'any')}\n"
+            f"Gender: {esc(spec.get('gender') or 'any')}\n"
+            f"Email required: {'yes' if spec.get('require_email') else 'no'}\n"
+            f"Website required: {'yes' if spec.get('require_website') else 'no'}"
+        )
         status_id=status.get("message_id") if isinstance(status,dict) else None
         async def progress(message):
             if status_id:
                 await edit_msg(chat,status_id,message)
             else:
                 await send(chat,message)
-        found,meta=await find_authors(country_name,g,gender,max(n*2,n+3),req,progress)
-        new=dup=0
+        found,meta=await find_authors(spec,progress)
+        n=spec["count"];new=dup=0
         if not found:
             return await progress(
                 f"⚠️ <b>Scout finished with no verified matches</b>\n"
                 f"Raw search results: <b>{meta['raw_results']}</b>\n"
                 f"Candidate names: <b>{meta['candidates']}</b>\n"
                 f"Candidates checked: <b>{meta['checked']}</b>\n"
-                f"Public emails found: <b>{meta['with_email']}</b>\n\n"
+                f"Websites found: <b>{meta['with_website']}</b>\n"
+                f"Public emails found: <b>{meta['with_email']}</b>\n"
+                f"Search used: <code>{esc(meta['query'])}</code>\n\n"
                 f"No prospects were saved. This tells us exactly which stage needs adjustment."
             )
         for idx,d in enumerate(found,1):
