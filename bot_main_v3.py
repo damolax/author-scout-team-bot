@@ -1817,6 +1817,16 @@ async def enhanced_handle(update: dict):
         chat = (m.get("chat") or {}).get("id")
         if chat and u.get("id"):
             uid = legacy.ensure_user(u)
+            if cmd == "/webkey":
+                tm=legacy.team(uid)
+                if not tm:
+                    return await legacy.send(chat,"Join or create a team first.")
+                token=legacy.serializer.dumps({"scope":"web","team_id":int(tm["id"]),"uid":int(uid)})
+                return await legacy.send(chat,
+                    "<b>🔐 Author Scout Web Access Key</b>\n\n"
+                    "Paste this key into the web dashboard login screen. It is signed to your team and expires automatically.\n\n"
+                    f"<code>{legacy.esc(token)}</code>\n\n"
+                    "Keep it private. Use /webkey again anytime to generate another valid signed key.")
             if cmd == "/indexstatus":
                 return await show_index_status(chat)
             if cmd == "/connections":
@@ -1848,6 +1858,7 @@ async def connection_startup():
                 {"command": "menu", "description": "Open Author Scout menu"},
                 {"command": "find", "description": "Scout authors using filters or natural language"},
                 {"command": "indexstatus", "description": "Show source index and pre-verified author reservoir"},
+                {"command": "webkey", "description": "Generate a signed key for the Author Scout web dashboard"},
                 {"command": "connections", "description": "Show qualified LinkedIn connections ready now"},
                 {"command": "connectsetup", "description": "Set your LinkedIn profile for background connection research"},
                 {"command": "connectionstatus", "description": "Show ready, connected and archived connection counts"},
@@ -1868,14 +1879,16 @@ async def connection_startup():
         print(f"CONNECTION_COMMAND_SETUP_ERROR {type(e).__name__}: {e}")
     app.state.connection_worker = asyncio.create_task(connection_worker())
     app.state.source_index_worker = asyncio.create_task(source_index_worker())
+    app.state.web_research_worker = asyncio.create_task(web_research_worker())
     print("CONNECTION_WORKER started=True")
     print(f"SOURCE_INDEX_WORKER started=True enabled={SOURCE_INDEX_ENABLED}")
+    print(f"WEB_RESEARCH_WORKER started=True concurrency={WEB_RESEARCH_JOB_CONCURRENCY}")
 
 
 @app.on_event("shutdown")
 async def connection_shutdown():
     global _http_client
-    for task_name in ("connection_worker","source_index_worker"):
+    for task_name in ("connection_worker","source_index_worker","web_research_worker"):
         task = getattr(app.state, task_name, None)
         if task:
             task.cancel()
