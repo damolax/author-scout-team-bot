@@ -652,7 +652,7 @@ def main_menu():
         [{"text":"📊 Campaign Stats","callback_data":"menu:campaign"},{"text":"📬 Replies","callback_data":"menu:replies"}],
         [{"text":"🔗 Gmail","callback_data":"menu:gmail"},{"text":"⚡ Automatic Sending","callback_data":"menu:auto"}],
         [{"text":"🔍 Last Search","callback_data":"menu:lastsearch"},{"text":"👥 Team","callback_data":"menu:team"}],
-        [{"text":"❓ Help","callback_data":"menu:help"}]
+        [{"text":"📘 How to Use","callback_data":"menu:howto"},{"text":"❓ Help","callback_data":"menu:help"}]
     ]}
 
 async def last_search(chat,uid):
@@ -819,6 +819,138 @@ async def queue(chat,uid,skip=None):
         kb
     )
 
+HOWTO="""<b>📘 HOW TO USE AUTHOR SCOUT TEAM BOT</b>
+
+<b>What this bot does</b>
+Author Scout helps a team discover authors, prevent duplicates, prepare research files for ChatGPT, import the finished outreach messages, send them, and track campaign activity.
+
+<b>1. Join or create a team</b>
+• Create: <code>/newteam Team Name</code>
+• Join: <code>/join CODE</code>
+• View your team: <code>/team</code>
+
+Each team has its own workspace, but author deduplication is global. If an author has already been claimed anywhere in the bot, the bot blocks the duplicate.
+
+<b>2. Scout authors</b>
+You can type naturally:
+<code>Karim in Saudi Arabia</code>
+<code>10 fantasy authors in Canada with public email</code>
+<code>Arabic writers in UAE active in 2026</code>
+
+Or use explicit filters:
+<code>/find country=UAE genre=fiction gender=male email=yes website=yes count=10</code>
+
+The bot searches public web sources, checks author identity, website, public professional email, email source, recent activity and source URLs, then saves accepted unique authors.
+
+Use <code>/lastsearch</code> to see the exact search routes used and the result counts.
+
+<b>3. Review authors</b>
+Use <code>/authors</code> to see recently scouted authors.
+
+The Telegram bot is for discovery and workflow. ChatGPT performs the deeper research and creates the best first message.
+
+<b>4. Download the ChatGPT research file</b>
+Use <code>/export</code> or tap <b>Download for ChatGPT</b>.
+
+The XLSX includes:
+• stable AS- author IDs
+• author name
+• country / genre
+• website
+• public professional email
+• email source URL
+• verification status
+• bio / research seed
+• books
+• recent activity
+• source URLs
+• all research/message output columns
+• HOW TO USE sheet
+• the full Master Author Research & Messaging System v3.2 prompt
+
+<b>5. Research in ChatGPT</b>
+Upload the exported XLSX to ChatGPT.
+
+Tell ChatGPT to read the embedded <b>ChatGPT Prompt</b> sheet and process every author.
+
+ChatGPT should deeply verify each author, research the current situation, representation/rights, opportunities, sources, personalization, subject lines and the strongest first message.
+
+It must preserve:
+• Source Row ID
+• Canonical Author ID
+• every original Bot column
+
+ChatGPT should return a new XLSX with the completed research and message fields.
+
+<b>6. Upload ChatGPT's finished file</b>
+Upload that XLSX directly back into this Telegram chat.
+
+The bot matches each row using the AS- ID first, then email/name as fallback.
+
+For outreach-ready rows it imports:
+• recipient email
+• selected subject
+• best first message in the author's language
+• English version
+
+Use <code>/queue</code> after import.
+
+<b>7. Send messages</b>
+The queue shows one author at a time with the full recipient, subject and message.
+
+You can:
+• <b>Open Gmail</b> for manual sending
+• <b>Mark Sent</b>
+• <b>Skip</b>
+• run a deliverability test
+• use <b>Auto Send</b> if Gmail is connected
+
+<b>8. Automatic sending</b>
+Automatic sending is locked until the user successfully connects Gmail.
+
+Use <code>/gmail</code> to connect Gmail.
+
+Use <code>/autosend</code> to check automatic-send availability.
+
+A user without a connected Gmail account cannot use automatic sending.
+
+<b>9. Track replies and results</b>
+Use <code>/replies</code> to mark authors who have replied.
+
+Use <code>/campaign</code> to see:
+• authors scouted
+• messages imported
+• messages ready
+• messages sent
+• replies
+• reply rate
+
+For a period:
+<code>/campaign 2026-09-01 2026-09-15</code>
+
+Use <code>/leaderboard</code> for team scouting activity.
+
+<b>10. Main workflow</b>
+Scout → Export → ChatGPT Research → Upload ChatGPT XLSX → Queue → Send → Track Replies → Campaign Stats
+
+<b>Useful commands</b>
+<code>/menu</code> Main buttons
+<code>/find</code> Scout authors
+<code>/authors</code> Recent authors
+<code>/lastsearch</code> Exact last search
+<code>/export</code> ChatGPT-ready XLSX
+<code>/brief</code> Download workflow brief
+<code>/queue</code> Outreach queue
+<code>/gmail</code> Gmail connection
+<code>/autosend</code> Automatic-send status
+<code>/replies</code> Mark replies
+<code>/campaign</code> Campaign totals
+<code>/stats</code> Team stats
+<code>/leaderboard</code> Team leaderboard
+<code>/team</code> Team details
+<code>/help</code> Quick command help
+<code>/howto</code> This complete guide""" 
+
 HELP="""<b>Author Scout Team Bot</b>
 
 <b>Scout</b>
@@ -849,6 +981,7 @@ Upload ChatGPT's returned XLSX/CSV directly to the bot.
 /stats
 /leaderboard
 /menu
+/howto — complete step-by-step guide
 
 The same prospect is blocked globally from being claimed twice."""
 
@@ -873,6 +1006,7 @@ async def handle(up):
         if d=="menu:lastsearch":return await last_search(chat,uid)
         if d=="menu:team":
             t=team(uid);return await send(chat,f"<b>{esc(t['name'])}</b>\nInvite: <code>{t['invite_code']}</code>" if t else "No team.")
+        if d=="menu:howto":return await send(chat,HOWTO,main_menu())
         if d=="menu:help":return await send(chat,HELP,main_menu())
         if d.startswith("autosend:"):return await auto_send_message(chat,uid,int(d.split(":")[1]))
         if d.startswith("replied:") and t:
@@ -911,6 +1045,7 @@ async def handle(up):
             cmd="/find";arg=natural.group(1).strip()
         elif t:
             cmd="/find";arg=txt
+    if cmd=="/howto":return await send(chat,HOWTO,main_menu())
     if cmd in {"/start","/help","/menu"}:
         return await send(chat,HELP,main_menu())
     if cmd=="/newteam":
@@ -1045,6 +1180,7 @@ async def startup():
                 {"command":"gmail","description":"Connect Gmail / deliverability settings"},
                 {"command":"autosend","description":"Automatic sending status"},
                 {"command":"team","description":"Show team and invite code"},
+                {"command":"howto","description":"Complete Author Scout workflow guide"},
                 {"command":"help","description":"Show help"}
             ])})
         except Exception as e:
