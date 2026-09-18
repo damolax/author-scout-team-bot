@@ -1052,6 +1052,298 @@ def claim_with_reservoir(uid, tid, d):
 legacy.claim = claim_with_reservoir
 
 
+
+# ---------------------------------------------------------------------------
+# Web dashboard API + queued research
+# ---------------------------------------------------------------------------
+
+def _web_auth_from_key(key: str) -> dict:
+    key=(key or "").strip()
+    if not key:
+        raise legacy.HTTPException(status_code=401, detail="Missing web access key")
+    # Owner/admin fallback for local testing.
+    if key == legacy.APP_SECRET and key != "change-me":
+        return {"scope":"web","admin":True,"team_id":None,"uid":None}
+    try:
+        payload=legacy.serializer.loads(key,max_age=WEB_KEY_MAX_AGE_SECONDS)
+    except Exception:
+        raise legacy.HTTPException(status_code=401, detail="Invalid or expired web access key")
+    if not isinstance(payload,dict) or payload.get("scope")!="web":
+        raise legacy.HTTPException(status_code=401, detail="Invalid web access key")
+    return {"scope":"web","admin":False,"team_id":int(payload.get("team_id") or 0),"uid":int(payload.get("uid") or 0)}
+
+def _web_auth(request) -> dict:
+    key=request.headers.get("x-author-scout-key","")
+    return _web_auth_from_key(key)
+
+def _auth_team(ctx: dict, requested_team_id: int | None=None) -> dict:
+    if ctx.get("admin"):
+        tid=int(requested_team_id or 0)
+        if tid:
+            t=legacy.row("SELECT * FROM teams WHERE id=:i",i=tid)
+        else:
+            t=legacy.row("SELECT * FROM teams ORDER BY id LIMIT 1")
+    else:
+        t=legacy.row("SELECT * FROM teams WHERE id=:i",i=int(ctx.get("team_id") or 0))
+    if not t:
+        raise legacy.HTTPException(status_code=404,detail="Team not found")
+    return t
+
+def _job_row(job_id: int, team_id: int):
+    return legacy.row("SELECT * FROM web_research_jobs WHERE id=:i AND team_id=:t",i=job_id,t=team_id)
+
+def _job_results(job_id: int, team_id: int, limit: int=200):
+    return legacy.rows("""SELECT p.*,r.position FROM web_research_job_results r
+        JOIN prospects p ON p.id=r.prospect_id
+        JOIN web_research_jobs j ON j.id=r.job_id
+        WHERE r.job_id=:j AND j.team_id=:t
+        ORDER BY r.position ASC,r.id ASC LIMIT :n""",j=job_id,t=team_id,n=limit)
+
+async def _run_web_research_job(job: dict):
+    jid=int(job["id"]);team_id=int(job["team_id"]);uid=int(job["requested_by_user_id"])
+    try:
+        spec=json.loads(job.get("parsed_spec") or "{}")
+        legacy.execq("""UPDATE web_research_jobs SET status='running',started_at=:d,
+            progress_text='Starting research',error='',updated_at=:d WHERE id=:i""",d=legacy.iso(),i=jid)
+
+        last_progress_at=0.0
+        async def progress(message):
+            nonlocal last_progress_at
+            now_mono=time.monotonic()
+            if now_mono-last_progress_at < 1.5:
+                return
+            last_progress_at=now_mono
+            clean=re.sub(r"<[^>]+>","",str(message or ""))
+            legacy.execq("UPDATE web_research_jobs SET progress_text=:p,updated_at=:d WHERE id=:i",
+                         p=clean[:1200],d=legacy.iso(),i=jid)
+
+        found,meta=await fast_find_authors(spec,progress)
+        accepted=duplicates=0
+        position=0
+        for d in found:
+            pid,created,existing=legacy.claim(uid,team_id,d)
+            if created:
+                accepted+=1;position+=1
+                try:
+                    legacy.execq("""INSERT INTO web_research_job_results(job_id,prospect_id,position,created_at)
+                        VALUES(:j,:p,:r,:d) ON CONFLICT(job_id,prospect_id) DO NOTHING""",
+                        j=jid,p=pid,r=position,d=legacy.iso())
+                except Exception:
+                    pass
+            else:
+                duplicates+=1
+        legacy.execq("""UPDATE web_research_jobs SET status='completed',progress_text=:p,
+            raw_results=:raw,candidates=:c,checked=:ch,accepted=:a,duplicates=:du,
+            completed_at=:d,updated_at=:d WHERE id=:i""",
+            p=f"Completed: {accepted} new qualified authors",raw=int(meta.get("raw_results") or 0),
+            c=int(meta.get("candidates") or 0),ch=int(meta.get("checked") or 0),
+            a=accepted,du=duplicates,d=legacy.iso(),i=jid)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        legacy.execq("""UPDATE web_research_jobs SET status='failed',error=:e,
+            progress_text='Research failed',completed_at=:d,updated_at=:d WHERE id=:i""",
+            e=f"{type(e).__name__}: {e}"[:1500],d=legacy.iso(),i=jid)
+        print(f"WEB_RESEARCH_JOB_ERROR id={jid} {type(e).__name__}: {e}")
+
+async def web_research_worker():
+    await asyncio.sleep(4)
+    running=set()
+    while True:
+        try:
+            # Drop completed tasks.
+            done={t for t in running if t.done()}
+            if done:
+                await asyncio.gather(*done,return_exceptions=True)
+                running-=done
+            capacity=max(0,WEB_RESEARCH_JOB_CONCURRENCY-len(running))
+            if capacity:
+                jobs=legacy.rows("""SELECT * FROM web_research_jobs WHERE status='queued'
+                    ORDER BY id ASC LIMIT :n""",n=capacity)
+                for job in jobs:
+                    # Claim the job before launching so a future multi-instance setup won't pick it twice.
+                    legacy.execq("""UPDATE web_research_jobs SET status='starting',updated_at=:d
+                        WHERE id=:i AND status='queued'""",d=legacy.iso(),i=job["id"])
+                    fresh=legacy.row("SELECT * FROM web_research_jobs WHERE id=:i",i=job["id"])
+                    if fresh and fresh.get("status")=="starting":
+                        task=asyncio.create_task(_run_web_research_job(fresh))
+                        running.add(task)
+            await asyncio.sleep(WEB_RESEARCH_POLL_SECONDS)
+        except asyncio.CancelledError:
+            for task in running:
+                task.cancel()
+            if running:
+                await asyncio.gather(*running,return_exceptions=True)
+            raise
+        except Exception as e:
+            print(f"WEB_RESEARCH_WORKER_ERROR {type(e).__name__}: {e}")
+            await asyncio.sleep(WEB_RESEARCH_POLL_SECONDS)
+
+@app.get("/api/v1/health")
+async def web_health():
+    return {"ok":True,"version":app.version,"service":"author-scout"}
+
+@app.get("/api/v1/session")
+async def web_session(request: legacy.Request):
+    ctx=_web_auth(request)
+    team=_auth_team(ctx)
+    uid=ctx.get("uid")
+    user=legacy.row("SELECT telegram_user_id,username,first_name FROM users WHERE telegram_user_id=:u",u=uid) if uid else None
+    return {"ok":True,"team":{"id":team["id"],"name":team["name"]},"user":user,"version":app.version}
+
+@app.get("/api/v1/dashboard")
+async def web_dashboard(request: legacy.Request):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    counts={
+        "authors":int((legacy.row("SELECT COUNT(*) c FROM prospects WHERE claimed_team_id=:t",t=tid) or {"c":0})["c"]),
+        "jobs_queued":int((legacy.row("SELECT COUNT(*) c FROM web_research_jobs WHERE team_id=:t AND status IN ('queued','starting','running')",t=tid) or {"c":0})["c"]),
+        "jobs_completed":int((legacy.row("SELECT COUNT(*) c FROM web_research_jobs WHERE team_id=:t AND status='completed'",t=tid) or {"c":0})["c"]),
+        "connections_ready":int((legacy.row("SELECT COUNT(*) c FROM connection_assignments WHERE team_id=:t AND status IN ('ready','saved')",t=tid) or {"c":0})["c"]),
+        "connections_done":int((legacy.row("SELECT COUNT(*) c FROM connection_assignments WHERE team_id=:t AND status='connected'",t=tid) or {"c":0})["c"]),
+        "messages_ready":int((legacy.row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND status='ready'",t=tid) or {"c":0})["c"]),
+        "messages_sent":int((legacy.row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND status='sent'",t=tid) or {"c":0})["c"]),
+    }
+    pool={
+        "candidates":int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool WHERE status IN ('discovered','verified')") or {"c":0})["c"]),
+        "verified":int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool WHERE status='verified'") or {"c":0})["c"]),
+        "sources":int((legacy.row("SELECT COUNT(*) c FROM author_source_registry WHERE status='active'") or {"c":0})["c"]),
+    }
+    return {"ok":True,"team":{"id":tid,"name":team["name"]},"counts":counts,"pool":pool}
+
+@app.post("/api/v1/research/jobs")
+async def web_create_job(request: legacy.Request):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    body=await request.json()
+    query=str(body.get("query") or "").strip()
+    if not query:
+        raise legacy.HTTPException(status_code=400,detail="Enter a specific author search query first")
+    spec=legacy.parse_find(query)
+    if not legacy.find_query_is_specific(spec):
+        raise legacy.HTTPException(status_code=400,detail="Search is too broad. Add a country, genre, author name, language, career stage, or activity signal.")
+    try:
+        requested=int(body.get("count") or spec.get("count") or 10)
+    except Exception:
+        requested=10
+    requested=max(1,min(WEB_MAX_RESEARCH_COUNT,requested))
+    spec["count"]=requested
+    uid=int(ctx.get("uid") or team.get("owner_user_id") or 0)
+    t=legacy.iso()
+    with legacy.engine.begin() as c:
+        r=c.execute(text("""INSERT INTO web_research_jobs(
+            team_id,requested_by_user_id,query_text,parsed_spec,status,requested_count,progress_text,created_at,updated_at)
+            VALUES(:t,:u,:q,:p,'queued',:n,'Queued for research',:d,:d) RETURNING id"""),
+            {"t":tid,"u":uid,"q":query,"p":json.dumps(spec),"n":requested,"d":t})
+        jid=int(r.scalar_one())
+    return {"ok":True,"job_id":jid,"status":"queued","requested_count":requested}
+
+@app.get("/api/v1/research/jobs")
+async def web_jobs(request: legacy.Request, limit: int=30):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    limit=max(1,min(100,int(limit)))
+    jobs=legacy.rows("""SELECT * FROM web_research_jobs WHERE team_id=:t
+        ORDER BY id DESC LIMIT :n""",t=tid,n=limit)
+    return {"ok":True,"jobs":jobs}
+
+@app.get("/api/v1/research/jobs/{job_id}")
+async def web_job(request: legacy.Request, job_id: int):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    job=_job_row(job_id,tid)
+    if not job:raise legacy.HTTPException(status_code=404,detail="Research job not found")
+    return {"ok":True,"job":job,"results":_job_results(job_id,tid)}
+
+@app.get("/api/v1/authors")
+async def web_authors(request: legacy.Request, limit: int=100, search: str=""):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    limit=max(1,min(500,int(limit)))
+    if search.strip():
+        term="%"+search.strip().lower()+"%"
+        rs=legacy.rows("""SELECT * FROM prospects WHERE claimed_team_id=:t AND
+            (lower(name) LIKE :q OR lower(country) LIKE :q OR lower(genre) LIKE :q OR lower(email) LIKE :q)
+            ORDER BY id DESC LIMIT :n""",t=tid,q=term,n=limit)
+    else:
+        rs=legacy.rows("SELECT * FROM prospects WHERE claimed_team_id=:t ORDER BY id DESC LIMIT :n",t=tid,n=limit)
+    return {"ok":True,"authors":rs}
+
+@app.get("/api/v1/source-status")
+async def web_source_status(request: legacy.Request):
+    _web_auth(request)
+    return {
+        "ok":True,
+        "demands":int((legacy.row("SELECT COUNT(*) c FROM author_search_demands") or {"c":0})["c"]),
+        "sources":int((legacy.row("SELECT COUNT(*) c FROM author_source_registry WHERE status='active'") or {"c":0})["c"]),
+        "pool":int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool WHERE status IN ('discovered','verified')") or {"c":0})["c"]),
+        "verified":int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool WHERE status='verified'") or {"c":0})["c"]),
+    }
+
+@app.get("/api/v1/connections")
+async def web_connections(request: legacy.Request, status: str="ready", limit: int=100):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    limit=max(1,min(300,int(limit)))
+    allowed={"ready","saved","connected","skipped","not_relevant"}
+    statuses=["ready","saved"] if status=="ready" else [status] if status in allowed else ["ready","saved"]
+    placeholders=",".join("'"+x+"'" for x in statuses)
+    rs=legacy.rows(f"""SELECT ca.id assignment_id,ca.status,ca.assigned_user_id,ca.assigned_at,
+        cp.profile_url,cp.name,cp.headline,cp.company,cp.country,cp.fit_score,cp.fit_reason,cp.fit_evidence
+        FROM connection_assignments ca JOIN connection_profiles cp ON cp.id=ca.profile_id
+        WHERE ca.team_id=:t AND ca.status IN ({placeholders})
+        ORDER BY cp.fit_score DESC,ca.id ASC LIMIT :n""",t=tid,n=limit)
+    return {"ok":True,"connections":rs}
+
+@app.post("/api/v1/connections/setup")
+async def web_connection_setup(request: legacy.Request):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    uid=int(ctx.get("uid") or team.get("owner_user_id") or 0)
+    body=await request.json()
+    profile_url=_canon_linkedin(str(body.get("linkedin_url") or ""))
+    if not profile_url:
+        raise legacy.HTTPException(status_code=400,detail="Enter a valid LinkedIn profile URL")
+    focus=str(body.get("focus") or "").strip()
+    context=await research_owner_profile(profile_url)
+    t=legacy.iso();countries=json.dumps(CONN_DEFAULT_COUNTRIES);excluded=json.dumps(CONN_EXCLUDED_COUNTRIES)
+    ex=legacy.row("SELECT telegram_user_id FROM connection_preferences WHERE telegram_user_id=:u",u=uid)
+    if ex:
+        legacy.execq("""UPDATE connection_preferences SET team_id=:tid,linkedin_profile_url=:p,profile_context=:c,
+            target_query=:target_query,target_countries=:tc,excluded_countries=:ec,min_score=:ms,
+            ready_target=:rt,enabled=1,updated_at=:d WHERE telegram_user_id=:u""",
+            tid=tid,p=profile_url,c=context,target_query=focus,tc=countries,ec=excluded,ms=CONN_MIN_SCORE,
+            rt=CONN_READY_TARGET,d=t,u=uid)
+    else:
+        legacy.execq("""INSERT INTO connection_preferences(telegram_user_id,team_id,linkedin_profile_url,profile_context,target_query,
+            target_countries,excluded_countries,min_score,ready_target,enabled,last_refill_at,last_error,created_at,updated_at)
+            VALUES(:u,:tid,:p,:c,:target_query,:tc,:ec,:ms,:rt,1,'','',:d,:d)""",
+            u=uid,tid=tid,p=profile_url,c=context,target_query=focus,tc=countries,ec=excluded,ms=CONN_MIN_SCORE,rt=CONN_READY_TARGET,d=t)
+    asyncio.create_task(replenish_user(uid))
+    return {"ok":True,"linkedin_url":profile_url,"ready_target":CONN_READY_TARGET,"min_score":CONN_MIN_SCORE}
+
+@app.post("/api/v1/connections/{assignment_id}/status")
+async def web_connection_status_update(request: legacy.Request, assignment_id: int):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    body=await request.json();action=str(body.get("status") or "").strip()
+    mapping={"connected":"connected","skip":"skipped","skipped":"skipped","not_relevant":"not_relevant","save":"saved","saved":"saved","ready":"ready"}
+    status=mapping.get(action)
+    if not status:raise legacy.HTTPException(status_code=400,detail="Invalid connection status")
+    a=legacy.row("""SELECT ca.*,cp.id profile_ref FROM connection_assignments ca
+        JOIN connection_profiles cp ON cp.id=ca.profile_id WHERE ca.id=:i AND ca.team_id=:t""",i=assignment_id,t=tid)
+    if not a:raise legacy.HTTPException(status_code=404,detail="Connection not found")
+    t=legacy.iso()
+    if status=="connected":
+        legacy.execq("UPDATE connection_assignments SET status='connected',connected_at=:d,archived_at=:d,updated_at=:d WHERE id=:i",d=t,i=assignment_id)
+    elif status=="skipped":
+        legacy.execq("UPDATE connection_assignments SET status='skipped',skipped_at=:d,archived_at=:d,updated_at=:d WHERE id=:i",d=t,i=assignment_id)
+    elif status=="not_relevant":
+        legacy.execq("UPDATE connection_assignments SET status='not_relevant',archived_at=:d,updated_at=:d WHERE id=:i",d=t,i=assignment_id)
+    else:
+        legacy.execq("UPDATE connection_assignments SET status=:s,updated_at=:d WHERE id=:i",s=status,d=t,i=assignment_id)
+    uid=int(ctx.get("uid") or team.get("owner_user_id") or 0)
+    try:
+        legacy.execq("INSERT INTO connection_events(profile_id,team_id,telegram_user_id,event_type,created_at) VALUES(:p,:t,:u,:e,:d)",
+                     p=a["profile_id"],t=tid,u=uid,e=status,d=t)
+    except Exception:pass
+    if status in {"connected","skipped","not_relevant"}:
+        asyncio.create_task(replenish_user(uid))
+    return {"ok":True,"status":status}
+
+
 # ---------------------------------------------------------------------------
 # LinkedIn Connection Intelligence
 # ---------------------------------------------------------------------------
