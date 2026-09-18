@@ -11,6 +11,7 @@ from urllib.parse import urlparse, urlunparse
 
 import bot_main as legacy
 from sqlalchemy import text
+from fastapi.middleware.cors import CORSMiddleware
 
 app = legacy.app
 app.version = "3.2"
@@ -54,6 +55,24 @@ SOURCE_INDEX_DEFAULT_COUNTRIES = [x.strip() for x in os.getenv(
     "SOURCE_INDEX_DEFAULT_COUNTRIES",
     "United Kingdom,United States,Canada,Australia,France,Germany,Austria,United Arab Emirates,New Zealand,Spain,Iceland"
 ).split(",") if x.strip()]
+WEB_RESEARCH_JOB_CONCURRENCY = max(1, min(4, int(os.getenv("WEB_RESEARCH_JOB_CONCURRENCY", "2"))))
+WEB_RESEARCH_POLL_SECONDS = max(2, int(os.getenv("WEB_RESEARCH_POLL_SECONDS", "4")))
+WEB_MAX_RESEARCH_COUNT = max(1, min(100, int(os.getenv("WEB_MAX_RESEARCH_COUNT", "50"))))
+WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
+
+
+# AUTHOR_SCOUT_WEB_CORS
+# The web dashboard is a static Vercel app. API access is still protected by a signed workspace key.
+try:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["GET","POST","OPTIONS"],
+        allow_headers=["*"],
+    )
+except RuntimeError:
+    pass
 
 _COUNTRY_ALIASES = {
     "usa": "United States", "us": "United States", "u.s.": "United States",
@@ -257,6 +276,36 @@ def init_connection_db() -> None:
         "CREATE INDEX IF NOT EXISTS idx_author_pool_country_status ON author_candidate_pool(country,status)",
         "CREATE INDEX IF NOT EXISTS idx_author_pool_status_seen ON author_candidate_pool(status,last_seen_at)",
         "CREATE INDEX IF NOT EXISTS idx_author_sources_country ON author_source_registry(country,status)",
+        f"""CREATE TABLE IF NOT EXISTS web_research_jobs(
+            id {pk},
+            team_id INTEGER NOT NULL,
+            requested_by_user_id BIGINT NOT NULL,
+            query_text TEXT NOT NULL,
+            parsed_spec TEXT NOT NULL DEFAULT '{{}}',
+            status TEXT NOT NULL DEFAULT 'queued',
+            requested_count INTEGER NOT NULL DEFAULT 10,
+            progress_text TEXT DEFAULT '',
+            raw_results INTEGER NOT NULL DEFAULT 0,
+            candidates INTEGER NOT NULL DEFAULT 0,
+            checked INTEGER NOT NULL DEFAULT 0,
+            accepted INTEGER NOT NULL DEFAULT 0,
+            duplicates INTEGER NOT NULL DEFAULT 0,
+            error TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            started_at TEXT DEFAULT '',
+            completed_at TEXT DEFAULT '',
+            updated_at TEXT NOT NULL
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS web_research_job_results(
+            id {pk},
+            job_id INTEGER NOT NULL,
+            prospect_id INTEGER NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE(job_id,prospect_id)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_web_jobs_team_status ON web_research_jobs(team_id,status)",
+        "CREATE INDEX IF NOT EXISTS idx_web_job_results_job ON web_research_job_results(job_id,position)",
     ]
     with legacy.engine.begin() as c:
         for s in stmts:
