@@ -669,6 +669,16 @@ async def root():return {"ok":True,"name":"Author Scout Team Bot","version":"2.0
 @app.get("/health")
 async def health():return {"ok":True}
 
+@app.get("/debug/search-test")
+async def debug_search_test():
+    q="Saudi Arabia author official website contact email"
+    rs=await search(q,5)
+    return {
+        "ok": bool(rs),
+        "count": len(rs),
+        "sample": [{"title":x.get("title","")[:120],"url":x.get("url","")} for x in rs[:3]]
+    }
+
 @app.get("/debug/db")
 async def debug_db():
     raw=os.getenv("DATABASE_URL","")
