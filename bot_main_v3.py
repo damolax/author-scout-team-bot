@@ -907,6 +907,17 @@ async def fast_find_authors(spec, progress=None):
 legacy.research = fast_research
 legacy.find_authors = fast_find_authors
 
+_legacy_claim = legacy.claim
+def claim_with_reservoir(uid, tid, d):
+    result=_legacy_claim(uid,tid,d)
+    try:
+        k=_pool_key(d.get("name") or "",d.get("country") or "")
+        legacy.execq("UPDATE author_candidate_pool SET status='claimed',updated_at=:t WHERE candidate_key=:k",t=legacy.iso(),k=k)
+    except Exception:
+        pass
+    return result
+legacy.claim = claim_with_reservoir
+
 
 # ---------------------------------------------------------------------------
 # LinkedIn Connection Intelligence
@@ -1381,6 +1392,8 @@ async def enhanced_handle(update: dict):
         chat = (m.get("chat") or {}).get("id")
         if chat and u.get("id"):
             uid = legacy.ensure_user(u)
+            if cmd == "/indexstatus":
+                return await show_index_status(chat)
             if cmd == "/connections":
                 return await show_connections(chat, uid)
             if cmd == "/connectionstatus":
@@ -1409,6 +1422,7 @@ async def connection_startup():
             await legacy.tg("setMyCommands", {"commands": json.dumps([
                 {"command": "menu", "description": "Open Author Scout menu"},
                 {"command": "find", "description": "Scout authors using filters or natural language"},
+                {"command": "indexstatus", "description": "Show source index and pre-verified author reservoir"},
                 {"command": "connections", "description": "Show qualified LinkedIn connections ready now"},
                 {"command": "connectsetup", "description": "Set your LinkedIn profile for background connection research"},
                 {"command": "connectionstatus", "description": "Show ready, connected and archived connection counts"},
@@ -1428,19 +1442,22 @@ async def connection_startup():
     except Exception as e:
         print(f"CONNECTION_COMMAND_SETUP_ERROR {type(e).__name__}: {e}")
     app.state.connection_worker = asyncio.create_task(connection_worker())
+    app.state.source_index_worker = asyncio.create_task(source_index_worker())
     print("CONNECTION_WORKER started=True")
+    print(f"SOURCE_INDEX_WORKER started=True enabled={SOURCE_INDEX_ENABLED}")
 
 
 @app.on_event("shutdown")
 async def connection_shutdown():
     global _http_client
-    task = getattr(app.state, "connection_worker", None)
-    if task:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+    for task_name in ("connection_worker","source_index_worker"):
+        task = getattr(app.state, task_name, None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     if _http_client is not None:
         try:
             await _http_client.aclose()
