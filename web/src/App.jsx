@@ -401,9 +401,10 @@ function Authors({ keyValue, active }) {
         <div><div className="eyebrow">My author library</div><h1>My Authors</h1><p>Authors exclusively claimed to your Author Scout account.</p></div>
         <input className="search-box" placeholder="Search authors…" value={search} onChange={e => setSearch(e.target.value)} />
       </div>
+      {notice && <div className="alert alert-success">{notice}</div>}
       {error && <div className="alert alert-error">{error}</div>}
       <div className="panel table-panel">
-        {!authors.length ? <Empty title="No matching authors" body="Run a research job to build your verified author database." /> :
+        {!authors.length ? <Empty title="No matching authors" body="Run a Scout job to start building your author library." /> :
         <div className="table-wrap">
           <table>
             <thead><tr><th>Author</th><th>Country</th><th>Genre</th><th>Source</th><th>Public email</th><th>Website</th><th>Activity</th></tr></thead>
