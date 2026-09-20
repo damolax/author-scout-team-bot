@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "author_scout": {
+      "type": "streamable-http",
+      "url": "https://author-scout-team-bot.onrender.com/mcp"
+    }
+  }
+}
