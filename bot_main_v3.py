@@ -58,9 +58,9 @@ SOURCE_INDEX_DEFAULT_COUNTRIES = [x.strip() for x in os.getenv(
 ).split(",") if x.strip()]
 WEB_RESEARCH_JOB_CONCURRENCY = max(1, min(12, int(os.getenv("WEB_RESEARCH_JOB_CONCURRENCY", "4"))))
 WEB_RESEARCH_POLL_SECONDS = max(2, int(os.getenv("WEB_RESEARCH_POLL_SECONDS", "4")))
-WEB_MAX_RESEARCH_COUNT = max(1, min(600, int(os.getenv("WEB_MAX_RESEARCH_COUNT", "300"))))
+WEB_MAX_RESEARCH_COUNT = max(1, min(100000, int(os.getenv("WEB_MAX_RESEARCH_COUNT", "50000"))))
 SCOUT_TARGET_PER_HOUR = max(30, min(600, int(os.getenv("SCOUT_TARGET_PER_HOUR", "300"))))
-SCOUT_MAX_MINUTES = max(1, min(120, int(os.getenv("SCOUT_MAX_MINUTES", "60"))))
+SCOUT_MAX_MINUTES = max(1, min(10080, int(os.getenv("SCOUT_MAX_MINUTES", "10080"))))
 WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
 
 
@@ -289,6 +289,10 @@ def init_connection_db() -> None:
             requested_count INTEGER NOT NULL DEFAULT 10,
             duration_minutes INTEGER NOT NULL DEFAULT 5,
             target_per_hour INTEGER NOT NULL DEFAULT 300,
+            elapsed_seconds INTEGER NOT NULL DEFAULT 0,
+            stop_requested INTEGER NOT NULL DEFAULT 0,
+            stopped_at TEXT DEFAULT '',
+            last_notified_count INTEGER NOT NULL DEFAULT 0,
             progress_text TEXT DEFAULT '',
             raw_results INTEGER NOT NULL DEFAULT 0,
             candidates INTEGER NOT NULL DEFAULT 0,
@@ -317,7 +321,11 @@ def init_connection_db() -> None:
             c.execute(text(s))
     for alter in [
         "ALTER TABLE web_research_jobs ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 5",
-        "ALTER TABLE web_research_jobs ADD COLUMN target_per_hour INTEGER NOT NULL DEFAULT 300"
+        "ALTER TABLE web_research_jobs ADD COLUMN target_per_hour INTEGER NOT NULL DEFAULT 300",
+        "ALTER TABLE web_research_jobs ADD COLUMN elapsed_seconds INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE web_research_jobs ADD COLUMN stop_requested INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE web_research_jobs ADD COLUMN stopped_at TEXT DEFAULT ''",
+        "ALTER TABLE web_research_jobs ADD COLUMN last_notified_count INTEGER NOT NULL DEFAULT 0"
     ]:
         try:
             with legacy.engine.begin() as c:
@@ -1263,46 +1271,113 @@ def _job_results(job_id: int, user_id: int, limit: int=200):
         WHERE r.job_id=:j AND j.requested_by_user_id=:u AND p.claimed_by_user_id=:u
         ORDER BY r.position ASC,r.id ASC LIMIT :n""",j=job_id,u=user_id,n=limit)
 
+async def _notify_user(uid: int, message: str):
+    """Best-effort Telegram notification for users who linked/started the bot."""
+    if not uid:
+        return
+    try:
+        await legacy.send(uid, message)
+    except Exception as e:
+        print(f"TELEGRAM_NOTIFY_ERROR uid={uid} {type(e).__name__}: {e}")
+
+
+def _job_time_payload(job: dict) -> dict:
+    duration_seconds=max(60,int(job.get("duration_minutes") or 1)*60)
+    elapsed=max(0,int(job.get("elapsed_seconds") or 0))
+    remaining=max(0,duration_seconds-elapsed)
+    return {
+        "duration_seconds":duration_seconds,
+        "elapsed_seconds":elapsed,
+        "remaining_seconds":remaining,
+        "progress_percent":min(100.0,round((elapsed/duration_seconds)*100,2)) if duration_seconds else 100.0,
+    }
+
+
 async def _run_web_research_job(job: dict):
     jid=int(job["id"]);team_id=int(job["team_id"]);uid=int(job["requested_by_user_id"])
     try:
         spec=json.loads(job.get("parsed_spec") or "{}")
         duration=max(1,min(SCOUT_MAX_MINUTES,int(job.get("duration_minutes") or 5)))
+        duration_seconds=duration*60
         target_rate=max(30,min(600,int(job.get("target_per_hour") or SCOUT_TARGET_PER_HOUR)))
         cap=max(1,min(WEB_MAX_RESEARCH_COUNT,int(job.get("requested_count") or max(5,round(duration*target_rate/60)))))
-        legacy.execq("""UPDATE web_research_jobs SET status='running',started_at=:d,
+
+        # Resume-safe counters come from the database, not process memory.
+        accepted=int(job.get("accepted") or 0)
+        duplicates=int(job.get("duplicates") or 0)
+        raw_results=int(job.get("raw_results") or 0)
+        candidates=int(job.get("candidates") or 0)
+        checked=int(job.get("checked") or 0)
+        elapsed_base=int(job.get("elapsed_seconds") or 0)
+        position=int((legacy.row("SELECT COUNT(*) c FROM web_research_job_results WHERE job_id=:j",j=jid) or {"c":0})["c"])
+        resumed=bool(job.get("started_at"))
+        started_at=job.get("started_at") or legacy.iso()
+        resume_started=time.monotonic()
+
+        legacy.execq("""UPDATE web_research_jobs SET status='running',started_at=:s,
             progress_text=:p,error='',updated_at=:d WHERE id=:i""",
-            d=legacy.iso(),p=f"Scouting for up to {duration} minute(s)",i=jid)
+            s=started_at,d=legacy.iso(),
+            p=("Resuming background Scout" if resumed else f"Scouting for up to {duration} minute(s)"),i=jid)
 
-        deadline=time.monotonic()+duration*60
-        accepted=duplicates=raw_results=candidates=checked=0
-        position=0
+        if not resumed:
+            await _notify_user(uid,
+                f"🚀 <b>Scout started</b>\n"
+                f"Job #{jid}\nDuration: <b>{duration} minute(s)</b>\n"
+                f"Target pace: up to <b>{target_rate}/hour</b>\n"
+                f"You can close the app. Authors are saved as they are found.")
+
         last_progress_at=0.0
+        last_milestone=int(job.get("last_notified_count") or 0)
 
-        async def progress(message):
-            nonlocal last_progress_at
+        def current_elapsed():
+            return min(duration_seconds,elapsed_base+int(max(0,time.monotonic()-resume_started)))
+
+        async def persist_progress(message):
+            nonlocal last_progress_at,last_milestone
             now_mono=time.monotonic()
             if now_mono-last_progress_at < 1.0:return
             last_progress_at=now_mono
-            remaining=max(0,int(deadline-now_mono))
+            elapsed=current_elapsed()
+            remaining=max(0,duration_seconds-elapsed)
             clean=re.sub(r"<[^>]+>","",str(message or ""))
-            legacy.execq("UPDATE web_research_jobs SET progress_text=:p,accepted=:a,duplicates=:du,raw_results=:r,candidates=:c,checked=:ch,updated_at=:d WHERE id=:i",
-                p=f"{clean} · {remaining//60}:{remaining%60:02d} remaining",a=accepted,du=duplicates,
-                r=raw_results,c=candidates,ch=checked,d=legacy.iso(),i=jid)
+            legacy.execq("""UPDATE web_research_jobs SET progress_text=:p,accepted=:a,duplicates=:du,
+                raw_results=:r,candidates=:c,checked=:ch,elapsed_seconds=:el,updated_at=:d WHERE id=:i""",
+                p=f"{clean} · {remaining//3600}h {(remaining%3600)//60}m remaining",
+                a=accepted,du=duplicates,r=raw_results,c=candidates,ch=checked,el=elapsed,d=legacy.iso(),i=jid)
+
+            # Milestone notifications are intentionally sparse.
+            milestone=(accepted//50)*50
+            if milestone>=50 and milestone>last_milestone:
+                last_milestone=milestone
+                legacy.execq("UPDATE web_research_jobs SET last_notified_count=:n WHERE id=:i",n=milestone,i=jid)
+                asyncio.create_task(_notify_user(uid,
+                    f"📚 <b>Scout progress</b>\nJob #{jid}\n"
+                    f"Authors saved: <b>{accepted}</b>\n"
+                    f"Time remaining: <b>{remaining//3600}h {(remaining%3600)//60}m</b>"))
 
         cycle=0
-        while time.monotonic()<deadline and accepted<cap:
+        stop_requested=False
+        while current_elapsed()<duration_seconds and accepted<cap:
+            state=legacy.row("SELECT stop_requested,status FROM web_research_jobs WHERE id=:i",i=jid) or {}
+            if int(state.get("stop_requested") or 0)==1:
+                stop_requested=True
+                break
+
             cycle+=1
             need=min(50,max(5,cap-accepted))
             spec["count"]=need
-            found,meta=await fast_scout_authors(spec,need,progress)
+            found,meta=await fast_scout_authors(spec,need,persist_progress)
             raw_results+=int(meta.get("raw_results") or 0)
             candidates=max(candidates,int(meta.get("candidates") or 0))
             checked+=int(meta.get("checked") or 0)
 
             created_this_cycle=0
             for d in found:
-                if time.monotonic()>=deadline or accepted>=cap:break
+                state=legacy.row("SELECT stop_requested FROM web_research_jobs WHERE id=:i",i=jid) or {}
+                if int(state.get("stop_requested") or 0)==1:
+                    stop_requested=True
+                    break
+                if current_elapsed()>=duration_seconds or accepted>=cap:break
                 pid,created,existing=legacy.claim(uid,team_id,d)
                 if created:
                     accepted+=1;position+=1;created_this_cycle+=1
@@ -1315,27 +1390,62 @@ async def _run_web_research_job(job: dict):
                 else:
                     duplicates+=1
 
-            await progress(f"Scout cycle {cycle}: {accepted} unique authors claimed")
-            if not found or created_this_cycle==0:
-                await asyncio.sleep(2)
-            else:
-                await asyncio.sleep(0.35)
+            await persist_progress(f"Scout cycle {cycle}: {accepted} unique authors saved")
+            if stop_requested:break
+            await asyncio.sleep(2 if not found or created_this_cycle==0 else 0.35)
 
-        legacy.execq("""UPDATE web_research_jobs SET status='completed',progress_text=:p,
-            raw_results=:raw,candidates=:c,checked=:ch,accepted=:a,duplicates=:du,
-            completed_at=:d,updated_at=:d WHERE id=:i""",
-            p=f"Completed: {accepted} unique authors claimed in {duration} minute scout",
-            raw=raw_results,c=candidates,ch=checked,a=accepted,du=duplicates,d=legacy.iso(),i=jid)
+        elapsed=current_elapsed()
+        if stop_requested:
+            status="stopped"
+            message=f"Stopped: {accepted} authors saved"
+            t=legacy.iso()
+            legacy.execq("""UPDATE web_research_jobs SET status='stopped',stop_requested=1,stopped_at=:d,
+                progress_text=:p,raw_results=:raw,candidates=:c,checked=:ch,accepted=:a,duplicates=:du,
+                elapsed_seconds=:el,completed_at=:d,updated_at=:d WHERE id=:i""",
+                p=message,raw=raw_results,c=candidates,ch=checked,a=accepted,du=duplicates,el=elapsed,d=t,i=jid)
+            await _notify_user(uid,
+                f"⏹ <b>Scout stopped</b>\nJob #{jid}\n"
+                f"Authors kept: <b>{accepted}</b>\n"
+                f"Nothing already found was removed.")
+        else:
+            t=legacy.iso()
+            legacy.execq("""UPDATE web_research_jobs SET status='completed',progress_text=:p,
+                raw_results=:raw,candidates=:c,checked=:ch,accepted=:a,duplicates=:du,
+                elapsed_seconds=:el,completed_at=:d,updated_at=:d WHERE id=:i""",
+                p=f"Completed: {accepted} unique authors saved",
+                raw=raw_results,c=candidates,ch=checked,a=accepted,du=duplicates,el=elapsed,d=t,i=jid)
+            await _notify_user(uid,
+                f"✅ <b>Scout complete</b>\nJob #{jid}\n"
+                f"Authors saved: <b>{accepted}</b>\n"
+                f"Open My Authors in the web app or use /authors here.")
     except asyncio.CancelledError:
+        # Persist active time before shutdown; startup recovery will requeue it.
+        try:
+            elapsed=min(int(job.get("duration_minutes") or 1)*60,
+                        int(job.get("elapsed_seconds") or 0)+int(max(0,time.monotonic()-resume_started)))
+            legacy.execq("""UPDATE web_research_jobs SET elapsed_seconds=:el,progress_text='Paused by worker restart',
+                updated_at=:d WHERE id=:i AND status IN ('starting','running')""",el=elapsed,d=legacy.iso(),i=jid)
+        except Exception:
+            pass
         raise
     except Exception as e:
         legacy.execq("""UPDATE web_research_jobs SET status='failed',error=:e,
             progress_text='Scout failed',completed_at=:d,updated_at=:d WHERE id=:i""",
             e=f"{type(e).__name__}: {e}"[:1500],d=legacy.iso(),i=jid)
+        await _notify_user(uid,f"⚠️ <b>Scout job #{jid} needs attention.</b>\nThe authors already saved are still in My Authors.")
         print(f"WEB_RESEARCH_JOB_ERROR id={jid} {type(e).__name__}: {e}")
 
 async def web_research_worker():
     await asyncio.sleep(4)
+    # Recover jobs interrupted by deploys/restarts. Saved authors remain intact.
+    try:
+        legacy.execq("""UPDATE web_research_jobs SET status='queued',progress_text='Resuming after worker restart',updated_at=:d
+            WHERE status IN ('starting','running') AND COALESCE(stop_requested,0)=0""",d=legacy.iso())
+        legacy.execq("""UPDATE web_research_jobs SET status='stopped',stopped_at=:d,completed_at=:d,
+            progress_text='Stopped',updated_at=:d
+            WHERE status IN ('queued','starting','running') AND COALESCE(stop_requested,0)=1""",d=legacy.iso())
+    except Exception as e:
+        print(f"SCOUT_RECOVERY_ERROR {type(e).__name__}: {e}")
     running=set()
     while True:
         try:
@@ -1438,14 +1548,33 @@ async def web_jobs(request: legacy.Request, limit: int=30):
     limit=max(1,min(100,int(limit)))
     jobs=legacy.rows("""SELECT * FROM web_research_jobs WHERE requested_by_user_id=:u
         ORDER BY id DESC LIMIT :n""",u=uid,n=limit)
-    return {"ok":True,"jobs":jobs}
+    return {"ok":True,"jobs":[{**j,**_job_time_payload(j)} for j in jobs]}
 
 @app.get("/api/v1/research/jobs/{job_id}")
 async def web_job(request: legacy.Request, job_id: int):
     ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0)
     job=_job_row(job_id,uid)
     if not job:raise legacy.HTTPException(status_code=404,detail="Research job not found")
-    return {"ok":True,"job":job,"results":_job_results(job_id,uid)}
+    return {"ok":True,"job":{**job,**_job_time_payload(job)},"results":_job_results(job_id,uid,500)}
+
+@app.post("/api/v1/research/jobs/{job_id}/stop")
+async def web_stop_job(request: legacy.Request, job_id: int):
+    ctx=_web_auth(request);_auth_team(ctx);uid=int(ctx.get("uid") or 0)
+    job=_job_row(job_id,uid)
+    if not job:raise legacy.HTTPException(status_code=404,detail="Scout job not found")
+    if job.get("status") in {"completed","stopped","failed"}:
+        return {"ok":True,"job":{**job,**_job_time_payload(job)}}
+    t=legacy.iso()
+    if job.get("status")=="queued":
+        legacy.execq("""UPDATE web_research_jobs SET stop_requested=1,status='stopped',stopped_at=:d,
+            completed_at=:d,progress_text='Stopped before worker started',updated_at=:d WHERE id=:i AND requested_by_user_id=:u""",
+            d=t,i=job_id,u=uid)
+        await _notify_user(uid,f"⏹ <b>Scout stopped</b>\nJob #{job_id}\nNo saved authors were removed.")
+    else:
+        legacy.execq("""UPDATE web_research_jobs SET stop_requested=1,progress_text='Stop requested · finishing current discovery step',
+            updated_at=:d WHERE id=:i AND requested_by_user_id=:u""",d=t,i=job_id,u=uid)
+    fresh=_job_row(job_id,uid)
+    return {"ok":True,"job":{**fresh,**_job_time_payload(fresh)}}
 
 @app.get("/api/v1/authors")
 async def web_authors(request: legacy.Request, limit: int=100, search: str=""):
