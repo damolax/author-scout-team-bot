@@ -476,7 +476,7 @@ function Authors({ keyValue, active }) {
     }
   }, [keyValue, active])
 
-  useEffect(() => { if (active) loadAi() }, [active, loadAi])
+  usePolling(loadAi, 10000, active)
 
   const aiJobFor = (id) => aiJobs.find(j => Number(j.prospect_id) === Number(id))
 
