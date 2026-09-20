@@ -392,7 +392,7 @@ def init_connection_db() -> None:
             prospect_id INTEGER NOT NULL,
             status TEXT NOT NULL DEFAULT 'queued',
             model TEXT DEFAULT '',
-            result_json TEXT DEFAULT '{}',
+            result_json TEXT DEFAULT '{{}}',
             error TEXT DEFAULT '',
             created_at TEXT NOT NULL,
             started_at TEXT DEFAULT '',
