@@ -28,6 +28,16 @@ function fmt(value) {
   const d = new Date(value)
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString()
 }
+function formatDuration(seconds) {
+  const s = Math.max(0, Number(seconds) || 0)
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (d) return d + 'd ' + h + 'h ' + m + 'm'
+  if (h) return h + 'h ' + m + 'm'
+  return m + 'm'
+}
+
 
 function short(text, n = 120) {
   const s = String(text || '')
@@ -217,6 +227,8 @@ function Research({ keyValue, active }) {
   const [jobs, setJobs] = useState([])
   const [selected, setSelected] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [stoppingId, setStoppingId] = useState(null)
+  const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
   const loadJobs = useCallback(async () => {
@@ -248,6 +260,18 @@ function Research({ keyValue, active }) {
       setSelected(detail)
     } catch (e) { setError(e.message) }
     finally { setCreating(false) }
+  }
+
+  const stopJob = async (id) => {
+    if (!window.confirm('Stop this Scout? Authors already found will stay saved in My Authors.')) return
+    setStoppingId(id); setError(''); setNotice('')
+    try {
+      const d = await request('/api/v1/research/jobs/' + id + '/stop', keyValue, { method: 'POST', body: '{}' })
+      setNotice('Stop requested. Authors already found will remain saved.')
+      setSelected(prev => prev?.job?.id === id ? { ...prev, job: d.job } : prev)
+      await loadJobs()
+    } catch (e) { setError(e.message) }
+    finally { setStoppingId(null) }
   }
 
   const openJob = async (id) => {
@@ -284,10 +308,15 @@ function Research({ keyValue, active }) {
                 <option value="10">10 minutes</option>
                 <option value="15">15 minutes</option>
                 <option value="30">30 minutes</option>
-                <option value="60">60 minutes</option>
+                <option value="60">1 hour</option>
+                <option value="360">6 hours</option>
+                <option value="720">12 hours</option>
+                <option value="1440">1 day</option>
+                <option value="4320">3 days</option>
+                <option value="10080">7 days</option>
               </select>
             </div>
-            <div className="compose-hint">Discovery only. The target ceiling is up to 300 unique authors/hour when the market has enough usable sources. Deep research and messaging happen later.</div>
+            <div className="compose-hint">Discovery only. The target ceiling is up to 300 unique authors/hour when the market has enough usable sources. Long Scouts continue in the background, and you can use the rest of Author Scout normally.</div>
             <button className="button button-primary" disabled={creating || !query.trim()}>
               {creating ? 'Starting…' : 'Start Scout'}
             </button>
@@ -295,6 +324,7 @@ function Research({ keyValue, active }) {
         </form>
       </div>
 
+      {notice && <div className="alert alert-success">{notice}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="research-layout">
@@ -307,11 +337,11 @@ function Research({ keyValue, active }) {
                   <div className="job-top"><Status value={job.status} /><span>#{job.id}</span></div>
                   <strong>{short(job.query_text, 92)}</strong>
                   <div className="job-meta">
-                    <span>{job.accepted || 0} claimed</span>
-                    <span>{job.duration_minutes || 5} min scout</span>
+                    <span>{job.accepted || 0} saved</span>
+                    <span>{formatDuration(job.remaining_seconds)} remaining</span>
                     <span>{fmt(job.created_at)}</span>
                   </div>
-                  {['queued','starting','running'].includes(job.status) && <div className="progress"><i style={{width: Math.min(92, Math.max(8, ((job.accepted || 0) / Math.max(1, job.requested_count)) * 100)) + '%'}} /></div>}
+                  {['queued','starting','running'].includes(job.status) && <div className="progress"><i style={{width: Math.min(100, Math.max(3, Number(job.progress_percent || 0))) + '%'}} /></div>}
                 </button>
               ))}
             </div>}
@@ -322,15 +352,26 @@ function Research({ keyValue, active }) {
             <>
               <div className="panel-head">
                 <div><span className="kicker">Scout job #{selected.job.id}</span><h2>{short(selected.job.query_text, 78)}</h2></div>
-                <Status value={selected.job.status} />
+                <div className="inline-actions">
+                  <Status value={selected.job.status} />
+                  {['queued','starting','running'].includes(selected.job.status) &&
+                    <button className="button button-danger-quiet" disabled={stoppingId === selected.job.id} onClick={() => stopJob(selected.job.id)}>
+                      {stoppingId === selected.job.id ? 'Stopping…' : 'Stop Scout'}
+                    </button>}
+                </div>
               </div>
               <div className="job-summary-grid">
-                <Metric label="Duration" value={(selected.job.duration_minutes || 5) + ' min'} />
-                <Metric label="Claimed" value={selected.job.accepted} />
-                <Metric label="Rate ceiling" value={(selected.job.target_per_hour || 300) + '/hr'} />
-                <Metric label="Duplicates" value={selected.job.duplicates} />
+                <Metric label="Saved" value={selected.job.accepted} />
+                <Metric label="Elapsed" value={formatDuration(selected.job.elapsed_seconds)} />
+                <Metric label="Remaining" value={formatDuration(selected.job.remaining_seconds)} />
+                <Metric label="Target pace" value={(selected.job.target_per_hour || 300) + '/hr'} />
               </div>
               <div className="progress-message">{selected.job.progress_text || 'Waiting for worker…'}</div>
+              <div className="progress scout-time-progress"><i style={{width: Math.min(100, Math.max(0, Number(selected.job.progress_percent || 0))) + '%'}} /></div>
+              <div className="job-time-row">
+                <span>{Math.round(Number(selected.job.progress_percent || 0))}% of scheduled Scout time used</span>
+                <span>{selected.job.accepted || 0} authors already saved</span>
+              </div>
               {selected.job.error && <div className="alert alert-error">{selected.job.error}</div>}
               <div className="result-stack">
                 {(selected.results || []).map(author => (
