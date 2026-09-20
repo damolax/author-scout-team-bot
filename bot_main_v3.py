@@ -1917,6 +1917,52 @@ async def web_authors_export_csv(request: legacy.Request):
         headers={"Content-Disposition":f'attachment; filename="{filename}"'})
 
 
+@app.get("/api/v1/authors/export.xlsx")
+async def web_authors_export_xlsx(request: legacy.Request):
+    ctx=_web_auth(request);_auth_team(ctx);uid=int(ctx.get("uid") or 0)
+    rs=legacy.rows("SELECT * FROM prospects WHERE claimed_by_user_id=:u ORDER BY id ASC",u=uid)
+    wb=legacy.Workbook()
+    ws=wb.active
+    ws.title="My Authors"
+    headers=[
+        "Author Scout ID","Author Name","Country","Genre","Verification Status",
+        "Official Website","Public Professional Email","Email Source URL",
+        "Discovery Platform","Discovery Source Type","Discovery Source URL",
+        "Discovery Query","Discovery Evidence","Discovery Confidence","Claimed At"
+    ]
+    ws.append(headers)
+    for p in rs:
+        ws.append([
+            f"AS-{p['id']}",p.get("name",""),p.get("country",""),p.get("genre",""),
+            p.get("verification_status",""),p.get("website",""),p.get("email",""),
+            p.get("email_source_url",""),p.get("discovery_platform",""),
+            p.get("discovery_source_type",""),p.get("discovery_source_url",""),
+            p.get("discovery_query",""),p.get("discovery_evidence",""),
+            p.get("discovery_confidence",0),p.get("claimed_at","")
+        ])
+    legacy.style_sheet(ws)
+    for idx,h in enumerate(headers,1):
+        letter=legacy.get_column_letter(idx)
+        ws.column_dimensions[letter].width=18
+        if any(x in h.lower() for x in ["evidence","query"]): ws.column_dimensions[letter].width=42
+        if any(x in h.lower() for x in ["url","website"]): ws.column_dimensions[letter].width=34
+        if "name" in h.lower(): ws.column_dimensions[letter].width=24
+    info=wb.create_sheet("Research Handoff")
+    info.append(["AUTHOR SCOUT RESEARCH HANDOFF"])
+    info.append(["Purpose","Use each row as a Research Seed for the deep research + messaging stage."])
+    info.append(["Ownership","These authors are exclusively claimed to the current Author Scout user."])
+    info.append(["Important","Discovery evidence is a starting point, not final proof. Deep research must independently verify important facts."])
+    info.append(["AI flow","When AI deep research is connected, Author Scout can process these records directly without downloading this file."])
+    info.column_dimensions["A"].width=20
+    info.column_dimensions["B"].width=105
+    buf=io.BytesIO()
+    wb.save(buf)
+    filename=f"author-scout-my-authors-{legacy.now().strftime('%Y-%m-%d')}.xlsx"
+    return Response(content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":f'attachment; filename="{filename}"'})
+
+
 @app.get("/api/v1/authors")
 async def web_authors(request: legacy.Request, limit: int=100, search: str=""):
     ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0)
