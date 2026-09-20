@@ -1264,6 +1264,120 @@ async def web_authors(request: legacy.Request, limit: int=100, search: str=""):
         rs=legacy.rows("SELECT * FROM prospects WHERE claimed_team_id=:t ORDER BY id DESC LIMIT :n",t=tid,n=limit)
     return {"ok":True,"authors":rs}
 
+
+def _web_actor_uid(ctx: dict, team: dict) -> int:
+    return int(ctx.get("uid") or team.get("owner_user_id") or 0)
+
+def _web_message(message_id: int, team_id: int):
+    return legacy.row("""SELECT m.*,p.name AS author_name,p.email AS author_email,
+        p.country AS author_country,p.genre AS author_genre,p.website AS author_website,
+        COALESCE(NULLIF(m.recipient_email,''),p.email) AS recipient
+        FROM messages m JOIN prospects p ON p.id=m.prospect_id
+        WHERE m.id=:i AND m.team_id=:t""",i=message_id,t=team_id)
+
+@app.get("/api/v1/messages")
+async def web_messages(request: legacy.Request, status: str="ready", limit: int=100, search: str=""):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    uid=_web_actor_uid(ctx,team)
+    limit=max(1,min(300,int(limit)))
+    status=(status or "ready").strip().lower()
+    if status=="sent":
+        condition="m.status='sent'"
+    elif status=="replied":
+        condition="m.reply_status='replied'"
+    elif status=="all":
+        condition="1=1"
+    else:
+        condition="m.status='ready'"
+        status="ready"
+    params={"t":tid,"n":limit}
+    search_sql=""
+    if search.strip():
+        params["q"]="%"+search.strip().lower()+"%"
+        search_sql=""" AND (lower(p.name) LIKE :q OR lower(COALESCE(m.subject,'')) LIKE :q
+            OR lower(COALESCE(m.recipient_email,p.email,'')) LIKE :q)"""
+    rs=legacy.rows(f"""SELECT m.id,m.prospect_id,m.subject,m.body,m.body_english,m.status,
+        m.sender_email,m.sent_by_user_id,m.sent_at,m.created_at,m.updated_at,
+        m.reply_status,m.replied_at,m.reply_notes,m.sent_via,m.auto_sent,
+        p.name AS author_name,p.email AS author_email,p.country AS author_country,
+        p.genre AS author_genre,p.website AS author_website,
+        COALESCE(NULLIF(m.recipient_email,''),p.email) AS recipient
+        FROM messages m JOIN prospects p ON p.id=m.prospect_id
+        WHERE m.team_id=:t AND {condition}{search_sql}
+        ORDER BY CASE WHEN m.status='ready' THEN 0 ELSE 1 END,m.id DESC LIMIT :n""",**params)
+    accounts=legacy.rows("SELECT id,email FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id",u=uid) if uid else []
+    return {"ok":True,"status":status,"messages":rs,
+            "gmail":{"connected":bool(accounts),"accounts":accounts}}
+
+@app.get("/api/v1/messages/{message_id}/compose-link")
+async def web_message_compose_link(request: legacy.Request, message_id: int):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    uid=_web_actor_uid(ctx,team)
+    m=_web_message(message_id,tid)
+    if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
+    if not (m.get("recipient") or "").strip():
+        raise legacy.HTTPException(status_code=400,detail="This message has no recipient email")
+    token=legacy.serializer.dumps({"uid":uid,"mid":int(message_id)})
+    base=legacy.BASE or "https://author-scout-team-bot.onrender.com"
+    return {"ok":True,"url":base.rstrip("/")+"/compose?t="+token}
+
+@app.post("/api/v1/messages/{message_id}/status")
+async def web_message_status(request: legacy.Request, message_id: int):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    uid=_web_actor_uid(ctx,team)
+    m=_web_message(message_id,tid)
+    if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
+    body=await request.json()
+    action=str(body.get("status") or "").strip().lower()
+    t=legacy.iso()
+    if action=="sent":
+        legacy.execq("""UPDATE messages SET status='sent',sent_by_user_id=:u,sent_at=:d,
+            updated_at=:d,sent_via=CASE WHEN COALESCE(sent_via,'')='' THEN 'manual_web' ELSE sent_via END
+            WHERE id=:i AND team_id=:t""",u=uid,d=t,i=message_id,t=tid)
+    elif action=="replied":
+        legacy.execq("""UPDATE messages SET reply_status='replied',replied_at=:d,updated_at=:d
+            WHERE id=:i AND team_id=:t""",d=t,i=message_id,t=tid)
+    elif action=="ready":
+        legacy.execq("""UPDATE messages SET status='ready',sent_by_user_id=NULL,sent_at='',
+            sender_email='',sent_via='',auto_sent=0,updated_at=:d WHERE id=:i AND team_id=:t""",
+            d=t,i=message_id,t=tid)
+    else:
+        raise legacy.HTTPException(status_code=400,detail="Status must be sent, replied, or ready")
+    return {"ok":True,"message":_web_message(message_id,tid)}
+
+@app.post("/api/v1/messages/{message_id}/send")
+async def web_message_send(request: legacy.Request, message_id: int):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    uid=_web_actor_uid(ctx,team)
+    m=_web_message(message_id,tid)
+    if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
+    if (m.get("status") or "")=="sent":
+        raise legacy.HTTPException(status_code=409,detail="This message is already marked sent")
+    body=await request.json()
+    gmail_id=int(body.get("gmail_id") or 0)
+    if gmail_id:
+        sender=legacy.row("SELECT * FROM gmail_accounts WHERE id=:g AND telegram_user_id=:u",g=gmail_id,u=uid)
+    else:
+        sender=legacy.row("SELECT * FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id LIMIT 1",u=uid)
+    if not sender:
+        raise legacy.HTTPException(status_code=400,detail="Connect Gmail in Telegram with /gmail before using Auto Send")
+    recipient=(m.get("recipient") or "").strip()
+    subject=(m.get("subject") or "").strip()
+    message_body=(m.get("body") or "").strip()
+    if not recipient:raise legacy.HTTPException(status_code=400,detail="Recipient email is missing")
+    if not subject or not message_body:
+        raise legacy.HTTPException(status_code=400,detail="Subject or message body is missing")
+    try:
+        await legacy.gmail_send(sender,recipient,subject,message_body)
+    except Exception as e:
+        raise legacy.HTTPException(status_code=502,detail=f"Gmail send failed: {type(e).__name__}")
+    t=legacy.iso()
+    legacy.execq("""UPDATE messages SET status='sent',sender_email=:e,sent_by_user_id=:u,
+        sent_at=:d,updated_at=:d,sent_via='gmail_api_web',auto_sent=1
+        WHERE id=:i AND team_id=:t""",e=sender["email"],u=uid,d=t,i=message_id,t=tid)
+    return {"ok":True,"sent":True,"recipient":recipient,"sender_email":sender["email"],
+            "message":_web_message(message_id,tid)}
+
 @app.get("/api/v1/source-status")
 async def web_source_status(request: legacy.Request):
     _web_auth(request)
