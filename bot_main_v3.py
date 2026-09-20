@@ -1345,9 +1345,10 @@ async def _run_web_research_job(job: dict):
                 p=f"{clean} · {remaining//3600}h {(remaining%3600)//60}m remaining",
                 a=accepted,du=duplicates,r=raw_results,c=candidates,ch=checked,el=elapsed,d=legacy.iso(),i=jid)
 
-            # Milestone notifications are intentionally sparse.
-            milestone=(accepted//50)*50
-            if milestone>=50 and milestone>last_milestone:
+            # Milestone notifications are intentionally sparse, especially for multi-day Scouts.
+            notify_step = 50 if duration <= 60 else 250 if duration <= 360 else 500 if duration <= 1440 else 1500
+            milestone=(accepted//notify_step)*notify_step
+            if milestone>=notify_step and milestone>last_milestone:
                 last_milestone=milestone
                 legacy.execq("UPDATE web_research_jobs SET last_notified_count=:n WHERE id=:i",n=milestone,i=jid)
                 asyncio.create_task(_notify_user(uid,
@@ -1437,18 +1438,22 @@ async def _run_web_research_job(job: dict):
 
 async def web_research_worker():
     await asyncio.sleep(4)
-    # Recover jobs interrupted by deploys/restarts. Saved authors remain intact.
-    try:
-        legacy.execq("""UPDATE web_research_jobs SET status='queued',progress_text='Resuming after worker restart',updated_at=:d
-            WHERE status IN ('starting','running') AND COALESCE(stop_requested,0)=0""",d=legacy.iso())
-        legacy.execq("""UPDATE web_research_jobs SET status='stopped',stopped_at=:d,completed_at=:d,
-            progress_text='Stopped',updated_at=:d
-            WHERE status IN ('queued','starting','running') AND COALESCE(stop_requested,0)=1""",d=legacy.iso())
-    except Exception as e:
-        print(f"SCOUT_RECOVERY_ERROR {type(e).__name__}: {e}")
     running=set()
     while True:
         try:
+            # Recover only stale jobs. This avoids double-running during blue/green deploy overlap.
+            cutoff=legacy.iso(legacy.now()-timedelta(minutes=2))
+            try:
+                legacy.execq("""UPDATE web_research_jobs SET status='queued',progress_text='Resuming after worker interruption',updated_at=:d
+                    WHERE status IN ('starting','running') AND COALESCE(stop_requested,0)=0 AND updated_at<:cut""",
+                    d=legacy.iso(),cut=cutoff)
+                legacy.execq("""UPDATE web_research_jobs SET status='stopped',stopped_at=:d,completed_at=:d,
+                    progress_text='Stopped',updated_at=:d
+                    WHERE status IN ('queued','starting','running') AND COALESCE(stop_requested,0)=1 AND updated_at<:cut""",
+                    d=legacy.iso(),cut=cutoff)
+            except Exception as e:
+                print(f"SCOUT_RECOVERY_ERROR {type(e).__name__}: {e}")
+
             # Drop completed tasks.
             done={t for t in running if t.done()}
             if done:
@@ -2243,6 +2248,24 @@ _legacy_main_menu = legacy.main_menu
 legacy.main_menu = enhanced_main_menu
 
 
+async def show_scout_status(chat: int, uid: int):
+    job=legacy.row("""SELECT * FROM web_research_jobs WHERE requested_by_user_id=:u
+        ORDER BY CASE WHEN status IN ('queued','starting','running') THEN 0 ELSE 1 END,id DESC LIMIT 1""",u=uid)
+    if not job:
+        return await legacy.send(chat,"No Scout jobs yet. Start one from Author Scout Web.")
+    timing=_job_time_payload(job)
+    status=job.get("status") or "unknown"
+    return await legacy.send(chat,
+        f"<b>🔭 Scout Status</b>\n"
+        f"Job: <b>#{job['id']}</b>\n"
+        f"Status: <b>{legacy.esc(status)}</b>\n"
+        f"Authors saved: <b>{int(job.get('accepted') or 0)}</b>\n"
+        f"Elapsed: <b>{timing['elapsed_seconds']//86400}d {(timing['elapsed_seconds']%86400)//3600}h {(timing['elapsed_seconds']%3600)//60}m</b>\n"
+        f"Remaining: <b>{timing['remaining_seconds']//86400}d {(timing['remaining_seconds']%86400)//3600}h {(timing['remaining_seconds']%3600)//60}m</b>\n"
+        f"Progress: <b>{timing['progress_percent']}%</b>\n\n"
+        f"Use /authors to see your latest claimed authors. Stop long Scouts from the web app.")
+
+
 async def enhanced_handle(update: dict):
     if await handle_connection_callback(update):
         return
@@ -2276,6 +2299,8 @@ async def enhanced_handle(update: dict):
                     "Keep it private. Use /webkey again anytime to generate another valid signed key.")
             if cmd == "/indexstatus":
                 return await show_index_status(chat)
+            if cmd == "/scoutstatus":
+                return await show_scout_status(chat, uid)
             if cmd == "/connections":
                 return await show_connections(chat, uid)
             if cmd == "/connectionstatus":
@@ -2304,7 +2329,8 @@ async def connection_startup():
             await legacy.tg("setMyCommands", {"commands": json.dumps([
                 {"command": "menu", "description": "Open Author Scout menu"},
                 {"command": "find", "description": "Scout authors using filters or natural language"},
-                {"command": "indexstatus", "description": "Show source index and pre-verified author reservoir"},
+                {"command": "indexstatus", "description": "Show source index and author reservoir"},
+                {"command": "scoutstatus", "description": "Show your active Scout progress and time remaining"},
                 {"command": "webkey", "description": "Generate a signed key for the Author Scout web dashboard"},
                 {"command": "connections", "description": "Show qualified LinkedIn connections ready now"},
                 {"command": "connectsetup", "description": "Set your LinkedIn profile for background connection research"},
