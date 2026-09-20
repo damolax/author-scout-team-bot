@@ -331,6 +331,7 @@ function Research({ keyValue, active }) {
                       <span>{[author.country, author.genre].filter(Boolean).join(' · ') || 'Author'}</span>
                     </div>
                     <div className="result-contact">
+                      {author.discovery_source_url && <a href={author.discovery_source_url} target="_blank" rel="noreferrer">{author.discovery_platform || author.discovery_source_type || 'Source'} ↗</a>}
                       {author.email && <a href={'mailto:' + author.email}>{author.email}</a>}
                       {author.website && <a href={author.website} target="_blank" rel="noreferrer">Website ↗</a>}
                     </div>
@@ -363,7 +364,7 @@ function Authors({ keyValue, active }) {
   return (
     <section>
       <div className="page-head">
-        <div><div className="eyebrow">Verified database</div><h1>Authors</h1><p>Qualified authors already claimed by your workspace.</p></div>
+        <div><div className="eyebrow">My author library</div><h1>My Authors</h1><p>Authors exclusively claimed to your Author Scout account.</p></div>
         <input className="search-box" placeholder="Search authors…" value={search} onChange={e => setSearch(e.target.value)} />
       </div>
       {error && <div className="alert alert-error">{error}</div>}
@@ -371,12 +372,18 @@ function Authors({ keyValue, active }) {
         {!authors.length ? <Empty title="No matching authors" body="Run a research job to build your verified author database." /> :
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Author</th><th>Country</th><th>Genre</th><th>Public email</th><th>Website</th><th>Activity</th></tr></thead>
+            <thead><tr><th>Author</th><th>Country</th><th>Genre</th><th>Source</th><th>Public email</th><th>Website</th><th>Activity</th></tr></thead>
             <tbody>
               {authors.map(a => <tr key={a.id}>
                 <td><strong>{a.name}</strong><small>#{a.id}</small></td>
                 <td>{a.country || '—'}</td>
                 <td>{a.genre || '—'}</td>
+                <td>
+                  {a.discovery_source_url
+                    ? <a target="_blank" rel="noreferrer" href={a.discovery_source_url}>{a.discovery_platform || a.discovery_source_type || 'Open source'} ↗</a>
+                    : (a.discovery_platform || a.discovery_source_type || '—')}
+                  {a.discovery_source_type && <small>{a.discovery_source_type.replaceAll('_',' ')}</small>}
+                </td>
                 <td>{a.email ? <a href={'mailto:' + a.email}>{a.email}</a> : '—'}</td>
                 <td>{a.website ? <a target="_blank" rel="noreferrer" href={a.website}>Open ↗</a> : '—'}</td>
                 <td title={a.recent_activity}>{short(a.recent_activity, 90) || '—'}</td>
