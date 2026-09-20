@@ -463,6 +463,15 @@ def _record_search_demand(spec: dict) -> None:
     except Exception as e:
         print(f"SOURCE_DEMAND_ERROR {type(e).__name__}: {e}")
 
+def _discovery_meta(candidate: dict) -> dict:
+    source_url=(candidate.get("discovery_url") or candidate.get("source_url") or "").strip()
+    return {
+        "discovery_source_url": source_url,
+        "discovery_platform": (candidate.get("source_domain") or legacy.host(source_url) or "").strip(),
+        "discovery_source_type": (candidate.get("source_type") or "web_search").strip(),
+    }
+
+
 def _source_type(title: str, snippet: str, url: str) -> str:
     s = f"{title} {snippet} {url}".lower()
     if "writers association" in s or "writers union" in s or "author association" in s:
@@ -952,6 +961,7 @@ async def fast_find_authors(spec, progress=None):
             try:payload=json.loads(p["verified_payload"] or "{}")
             except Exception:payload={}
         if payload:
+            payload.update(_discovery_meta(p))
             checked+=1
             if payload.get("website"):with_website+=1
             if payload.get("email"):with_email+=1
@@ -976,6 +986,7 @@ async def fast_find_authors(spec, progress=None):
     async def verify_pool(p):
         async with sem:
             d=await _contact_research(p["name"],country_term or p.get("country") or "",genre or p.get("genre") or "",p.get("discovery_url") or "")
+            d.update(_discovery_meta(p))
             passed=(not require_website or bool(d.get("website"))) and (not require_email or bool(d.get("email")))
             if passed:d=await _enrich_activity(d)
             await asyncio.to_thread(_mark_pool_verified,int(p["id"]),d,passed)
@@ -1032,7 +1043,9 @@ async def fast_find_authors(spec, progress=None):
                                         "search_result",q,r.get("snippet") or "")
             if not pid:continue
             fresh_seen.add(nk)
-            fresh.append({"id":pid,"name":n,"country":country_term,"genre":genre,"discovery_url":r.get("url") or ""})
+            fresh.append({"id":pid,"name":n,"country":country_term,"genre":genre,
+                          "discovery_url":r.get("url") or "","source_url":r.get("url") or "",
+                          "source_domain":legacy.host(r.get("url") or ""),"source_type":"web_search"})
 
     fresh_tasks=[asyncio.create_task(verify_pool(p)) for p in fresh[:max(count*6,30)]]
     for fut in asyncio.as_completed(fresh_tasks):
