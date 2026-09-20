@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import os
 import re
@@ -11,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 
 import bot_main as legacy
 from sqlalchemy import text
+from fastapi import Response
 from fastapi.middleware.cors import CORSMiddleware
 
 app = legacy.app
@@ -83,6 +86,70 @@ _COUNTRY_ALIASES = {
     "uk": "United Kingdom", "u.k.": "United Kingdom",
     "uae": "United Arab Emirates", "ksa": "Saudi Arabia", "saudi": "Saudi Arabia",
 }
+
+_SCOUT_COUNTRIES = [
+    "United States","United Kingdom","Canada","Australia","France","Germany","Austria",
+    "United Arab Emirates","New Zealand","Spain","Iceland","Saudi Arabia","Portugal",
+    "Italy","Netherlands","Belgium","Switzerland","Sweden","Norway","Denmark","Finland",
+    "Ireland","India","Japan","South Korea","Singapore","South Africa","Nigeria","Ghana",
+    "Kenya","Mexico","Brazil","Argentina","Chile","Colombia"
+]
+_COUNTRY_TLDS = {
+    "Spain":".es","Iceland":".is","United Kingdom":".uk","Canada":".ca","Australia":".au",
+    "France":".fr","Germany":".de","Austria":".at","United Arab Emirates":".ae",
+    "New Zealand":".nz","Saudi Arabia":".sa","Portugal":".pt","Italy":".it",
+    "Netherlands":".nl","Belgium":".be","Switzerland":".ch","Sweden":".se",
+    "Norway":".no","Denmark":".dk","Finland":".fi","Ireland":".ie","India":".in",
+    "Japan":".jp","South Korea":".kr","Singapore":".sg","South Africa":".za",
+    "Nigeria":".ng","Ghana":".gh","Kenya":".ke","Mexico":".mx","Brazil":".br",
+    "Argentina":".ar","Chile":".cl","Colombia":".co"
+}
+
+def _canon_country(value: str) -> str:
+    v=re.sub(r"\s+"," ",(value or "").strip())
+    if not v:return ""
+    return _COUNTRY_ALIASES.get(v.lower(),v)
+
+def _infer_country_from_text(value: str) -> str:
+    s=" "+re.sub(r"\s+"," ",(value or "").lower())+" "
+    for alias,canonical in sorted(_COUNTRY_ALIASES.items(),key=lambda x:-len(x[0])):
+        if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])",s):
+            return canonical
+    for country in sorted(_SCOUT_COUNTRIES,key=len,reverse=True):
+        if re.search(rf"(?<![a-z]){re.escape(country.lower())}(?![a-z])",s):
+            return country
+    return ""
+
+def _country_compatible(country: str, url: str="", text_value: str="") -> bool:
+    desired=_canon_country(country)
+    if not desired:return True
+    host=legacy.host(url or "")
+    desired_tld=_COUNTRY_TLDS.get(desired)
+    # A different explicit country-code domain is a hard rejection.
+    for c,tld in _COUNTRY_TLDS.items():
+        if host.endswith(tld) and c!=desired:
+            return False
+    evidence=" "+re.sub(r"\s+"," ",(text_value or "").lower())+" "
+    mentioned=[]
+    for c in _SCOUT_COUNTRIES:
+        if re.search(rf"(?<![a-z]){re.escape(c.lower())}(?![a-z])",evidence):
+            mentioned.append(c)
+    if mentioned and desired not in mentioned:
+        return False
+    if desired_tld and host.endswith(desired_tld):
+        return True
+    return True
+
+def _candidate_country_compatible(candidate: dict, country: str) -> bool:
+    desired=_canon_country(country)
+    if not desired:return True
+    stored=_canon_country(candidate.get("country") or "")
+    if stored and stored.lower()!=desired.lower():
+        return False
+    url=candidate.get("discovery_url") or candidate.get("source_url") or ""
+    text_value=" ".join([candidate.get("snippet") or "",candidate.get("name") or ""])
+    return _country_compatible(desired,url,text_value)
+
 
 _STOPWORDS = {
     "linkedin", "profile", "professional", "experience", "company", "services", "service",
@@ -583,6 +650,7 @@ def _pool_candidates(spec: dict, limit: int=100) -> list[dict]:
     qtokens=[x for x in _tokens((spec.get("query") or "").lower(),8) if x not in {"author","authors","writer","writers","book","books"}]
     scored=[]
     for r in rs:
+        if country and not _candidate_country_compatible(r,country):continue
         if name_filter and name_filter not in (r.get("name") or "").lower():continue
         blob=" ".join([r.get("name") or "",r.get("genre") or "",r.get("snippet") or "",r.get("discovery_query") or "",r.get("source_type") or ""]).lower()
         overlap=sum(1 for x in qtokens if x in blob)
@@ -655,6 +723,9 @@ async def _index_demand(demand: dict) -> dict:
     for query,rs in zip(routes,sets):
         if isinstance(rs,Exception):continue
         for r in rs:
+            evidence=f"{r.get('title','')} {r.get('snippet','')}"
+            if country and not _country_compatible(country,r.get("url") or "",evidence):
+                continue
             n=legacy.cand(r.get("title",""),r.get("snippet",""))
             if n and _upsert_pool_candidate(n,country,genre,r.get("url") or "",r.get("url") or "","search_result",query,r.get("snippet") or ""):
                 direct+=1
@@ -1164,6 +1235,8 @@ async def fast_scout_authors(spec: dict, limit: int=25, progress=None):
         }
 
     def eligible(p):
+        if country_term and not _candidate_country_compatible(p,country_term):
+            return False
         n=(p.get("name") or "").strip()
         nk=_norm_author_name(n)
         if not nk or nk in existing_names:return False
@@ -1519,11 +1592,22 @@ async def web_create_job(request: legacy.Request):
     ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
     body=await request.json()
     query=str(body.get("query") or "").strip()
-    if not query:
-        raise legacy.HTTPException(status_code=400,detail="Enter a specific author search query first")
-    spec=legacy.parse_find(query)
+    filters=body.get("filters") if isinstance(body.get("filters"),dict) else {}
+    spec=legacy.parse_find(query) if query else legacy.parse_find("")
+    for field in ("name","country","genre","language","year"):
+        value=str(filters.get(field) or body.get(field) or "").strip()
+        if value:
+            spec[field]=value
+    gender=str(filters.get("gender") or body.get("gender") or spec.get("gender") or "any").strip().lower()
+    spec["gender"]=gender if gender in {"male","female","any"} else "any"
+    if not spec.get("country"):
+        inferred=_infer_country_from_text(query)
+        if inferred:
+            spec["country"]=inferred
+    spec["country"]=_canon_country(spec.get("country") or "")
+    spec["strict_country"]=bool(spec.get("country"))
     if not legacy.find_query_is_specific(spec):
-        raise legacy.HTTPException(status_code=400,detail="Search is too broad. Add a country, genre, author name, language, career stage, or activity signal.")
+        raise legacy.HTTPException(status_code=400,detail="Add at least one specific filter such as country, genre, author name, language, gender, or additional instructions.")
     try:
         duration=int(body.get("duration_minutes") or 5)
     except Exception:
@@ -1538,12 +1622,21 @@ async def web_create_job(request: legacy.Request):
     if active:
         raise legacy.HTTPException(status_code=409,detail=f"You already have an active scout job #{active['id']}. Let it finish before starting another.")
     t=legacy.iso()
+    summary_parts=[]
+    if spec.get("name"):summary_parts.append("Name: "+spec["name"])
+    if spec.get("country"):summary_parts.append("Country: "+spec["country"])
+    if spec.get("genre"):summary_parts.append("Genre: "+spec["genre"])
+    if spec.get("gender") and spec.get("gender")!="any":summary_parts.append("Gender: "+spec["gender"])
+    if spec.get("language"):summary_parts.append("Language: "+spec["language"])
+    if spec.get("year"):summary_parts.append("Year: "+spec["year"])
+    if query:summary_parts.append(query)
+    display_query=" · ".join(summary_parts) or "Structured author Scout"
     with legacy.engine.begin() as c:
         r=c.execute(text("""INSERT INTO web_research_jobs(
             team_id,requested_by_user_id,query_text,parsed_spec,status,requested_count,duration_minutes,target_per_hour,
             progress_text,created_at,updated_at)
             VALUES(:t,:u,:q,:p,'queued',:n,:m,:rate,'Queued for scouting',:d,:d) RETURNING id"""),
-            {"t":tid,"u":uid,"q":query,"p":json.dumps(spec),"n":requested,"m":duration,"rate":target_rate,"d":t})
+            {"t":tid,"u":uid,"q":display_query,"p":json.dumps(spec),"n":requested,"m":duration,"rate":target_rate,"d":t})
         jid=int(r.scalar_one())
     return {"ok":True,"job_id":jid,"status":"queued","requested_count":requested,
             "duration_minutes":duration,"target_per_hour":target_rate}
@@ -1581,6 +1674,25 @@ async def web_stop_job(request: legacy.Request, job_id: int):
             updated_at=:d WHERE id=:i AND requested_by_user_id=:u""",d=t,i=job_id,u=uid)
     fresh=_job_row(job_id,uid)
     return {"ok":True,"job":{**fresh,**_job_time_payload(fresh)}}
+
+@app.get("/api/v1/authors/export.csv")
+async def web_authors_export_csv(request: legacy.Request):
+    ctx=_web_auth(request);_auth_team(ctx);uid=int(ctx.get("uid") or 0)
+    rs=legacy.rows("SELECT * FROM prospects WHERE claimed_by_user_id=:u ORDER BY id ASC",u=uid)
+    output=io.StringIO()
+    fields=[
+        "id","name","country","genre","verification_status","website","email","email_source_url",
+        "discovery_platform","discovery_source_type","discovery_source_url","discovery_query",
+        "discovery_evidence","discovery_confidence","claimed_at"
+    ]
+    writer=csv.DictWriter(output,fieldnames=fields,extrasaction="ignore")
+    writer.writeheader()
+    for row in rs:
+        writer.writerow({k:row.get(k,"") for k in fields})
+    filename=f"author-scout-my-authors-{legacy.now().strftime('%Y-%m-%d')}.csv"
+    return Response(content=output.getvalue(),media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":f'attachment; filename="{filename}"'})
+
 
 @app.get("/api/v1/authors")
 async def web_authors(request: legacy.Request, limit: int=100, search: str=""):
