@@ -212,7 +212,7 @@ function Dashboard({ keyValue, session, active }) {
 
 function Research({ keyValue, active }) {
   const [query, setQuery] = useState('')
-  const [count, setCount] = useState(25)
+  const [duration, setDuration] = useState(10)
   const [jobs, setJobs] = useState([])
   const [selected, setSelected] = useState(null)
   const [creating, setCreating] = useState(false)
@@ -239,7 +239,7 @@ function Research({ keyValue, active }) {
     try {
       const d = await request('/api/v1/research/jobs', keyValue, {
         method: 'POST',
-        body: JSON.stringify({ query: query.trim(), count: Number(count) || 25 })
+        body: JSON.stringify({ query: query.trim(), duration_minutes: Number(duration) || 10 })
       })
       setQuery('')
       await loadJobs()
@@ -258,9 +258,9 @@ function Research({ keyValue, active }) {
     <section>
       <div className="page-head">
         <div>
-          <div className="eyebrow">Author discovery</div>
-          <h1>Research</h1>
-          <p>Give the engine a real target. Nothing searches until you submit a query.</p>
+          <div className="eyebrow">Fast author discovery</div>
+          <h1>Scout</h1>
+          <p>Set a market and a duration. Author Scout keeps discovering unique authors in the background while you use the rest of the app.</p>
         </div>
       </div>
 
@@ -271,16 +271,24 @@ function Research({ keyValue, active }) {
             rows="4"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Example: emerging male fantasy authors in Canada, active in 2026, with official website and verified public professional email"
+            placeholder="Example: emerging male fantasy authors in Canada, active in 2026, low to medium saturation"
           />
           <div className="compose-row">
             <div className="field-small">
-              <label>Target results</label>
-              <input type="number" min="1" max="50" value={count} onChange={e => setCount(e.target.value)} />
+              <label>Scout duration</label>
+              <select value={duration} onChange={e => setDuration(Number(e.target.value))}>
+                <option value="1">1 minute</option>
+                <option value="3">3 minutes</option>
+                <option value="5">5 minutes</option>
+                <option value="10">10 minutes</option>
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60">60 minutes</option>
+              </select>
             </div>
-            <div className="compose-hint">The engine filters duplicates, generic contacts, junk identities and high-saturation authors before saving results.</div>
+            <div className="compose-hint">Discovery only. The target ceiling is up to 300 unique authors/hour when the market has enough usable sources. Deep research and messaging happen later.</div>
             <button className="button button-primary" disabled={creating || !query.trim()}>
-              {creating ? 'Queuing…' : 'Start research'}
+              {creating ? 'Starting…' : 'Start Scout'}
             </button>
           </div>
         </form>
@@ -290,16 +298,16 @@ function Research({ keyValue, active }) {
 
       <div className="research-layout">
         <div className="panel jobs-panel">
-          <div className="panel-head"><div><span className="kicker">Live queue</span><h2>Research jobs</h2></div><button className="button button-quiet" onClick={loadJobs}>Refresh</button></div>
-          {!jobs.length ? <Empty title="No research jobs yet" body="Submit your first specific author search above." /> :
+          <div className="panel-head"><div><span className="kicker">Live queue</span><h2>Scout jobs</h2></div><button className="button button-quiet" onClick={loadJobs}>Refresh</button></div>
+          {!jobs.length ? <Empty title="No scout jobs yet" body="Submit your first specific author search above." /> :
             <div className="job-list">
               {jobs.map(job => (
                 <button key={job.id} className={'job-row ' + (selected?.job?.id === job.id ? 'active' : '')} onClick={() => openJob(job.id)}>
                   <div className="job-top"><Status value={job.status} /><span>#{job.id}</span></div>
                   <strong>{short(job.query_text, 92)}</strong>
                   <div className="job-meta">
-                    <span>{job.accepted || 0}/{job.requested_count} saved</span>
-                    <span>{job.checked || 0} checked</span>
+                    <span>{job.accepted || 0} claimed</span>
+                    <span>{job.duration_minutes || 5} min scout</span>
                     <span>{fmt(job.created_at)}</span>
                   </div>
                   {['queued','starting','running'].includes(job.status) && <div className="progress"><i style={{width: Math.min(92, Math.max(8, ((job.accepted || 0) / Math.max(1, job.requested_count)) * 100)) + '%'}} /></div>}
@@ -309,16 +317,16 @@ function Research({ keyValue, active }) {
         </div>
 
         <div className="panel job-detail">
-          {!selected ? <Empty title="Select a research job" body="Open a job to watch progress and inspect the qualified authors it produced." /> : (
+          {!selected ? <Empty title="Select a Scout job" body="Open a job to watch live progress and inspect the unique authors it has claimed for you." /> : (
             <>
               <div className="panel-head">
-                <div><span className="kicker">Research job #{selected.job.id}</span><h2>{short(selected.job.query_text, 78)}</h2></div>
+                <div><span className="kicker">Scout job #{selected.job.id}</span><h2>{short(selected.job.query_text, 78)}</h2></div>
                 <Status value={selected.job.status} />
               </div>
               <div className="job-summary-grid">
-                <Metric label="Requested" value={selected.job.requested_count} />
-                <Metric label="Saved" value={selected.job.accepted} />
-                <Metric label="Checked" value={selected.job.checked} />
+                <Metric label="Duration" value={(selected.job.duration_minutes || 5) + ' min'} />
+                <Metric label="Claimed" value={selected.job.accepted} />
+                <Metric label="Rate ceiling" value={(selected.job.target_per_hour || 300) + '/hr'} />
                 <Metric label="Duplicates" value={selected.job.duplicates} />
               </div>
               <div className="progress-message">{selected.job.progress_text || 'Waiting for worker…'}</div>
@@ -339,7 +347,7 @@ function Research({ keyValue, active }) {
                 ))}
               </div>
               {selected.job.status === 'completed' && !(selected.results || []).length &&
-                <Empty title="No new authors saved" body="Candidates may have failed verification or already existed in the shared database." />}
+                <Empty title="No new authors claimed" body="The candidates found may already belong to other Author Scout users or the source market may be temporarily exhausted." />}
             </>
           )}
         </div>
@@ -689,7 +697,7 @@ function System({ keyValue, active }) {
 
 const NAV = [
   ['dashboard','Overview','⌂'],
-  ['research','Research','⌕'],
+  ['research','Scout','⌕'],
   ['authors','Authors','A'],
   ['messages','Messages','✉'],
   ['connections','Connections','↗'],
