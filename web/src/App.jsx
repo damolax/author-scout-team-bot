@@ -140,8 +140,7 @@ function Login({ onLogin, busy, error }) {
             placeholder="Paste the key from /webkey"
             autoFocus
           />
-          {notice && <div className="alert alert-success">{notice}</div>}
-      {error && <div className="alert alert-error">{error}</div>}
+          {error && <div className="alert alert-error">{error}</div>}
           <button className="button button-primary button-block" disabled={!key.trim() || busy}>
             {busy ? 'Checking workspace…' : 'Enter Author Scout'}
           </button>
