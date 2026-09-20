@@ -130,7 +130,8 @@ function Login({ onLogin, busy, error }) {
             placeholder="Paste the key from /webkey"
             autoFocus
           />
-          {error && <div className="alert alert-error">{error}</div>}
+          {notice && <div className="alert alert-success">{notice}</div>}
+      {error && <div className="alert alert-error">{error}</div>}
           <button className="button button-primary button-block" disabled={!key.trim() || busy}>
             {busy ? 'Checking workspace…' : 'Enter Author Scout'}
           </button>
@@ -359,6 +360,8 @@ function Research({ keyValue, active }) {
 function Authors({ keyValue, active }) {
   const [authors, setAuthors] = useState([])
   const [search, setSearch] = useState('')
+  const [selectedSeed, setSelectedSeed] = useState(null)
+  const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const load = useCallback(async () => {
     try {
@@ -368,6 +371,29 @@ function Authors({ keyValue, active }) {
     } catch (e) { setError(e.message) }
   }, [keyValue, search])
   useEffect(() => { if (!active) return; const t = setTimeout(load, 250); return () => clearTimeout(t) }, [load, active])
+
+  const researchSeedText = (a) => [
+    'AUTHOR RESEARCH SEED',
+    'Name: ' + (a.name || ''),
+    'Country/Market: ' + (a.country || ''),
+    'Genre/Category: ' + (a.genre || ''),
+    'Discovery platform: ' + (a.discovery_platform || ''),
+    'Source type: ' + (a.discovery_source_type || ''),
+    'Source URL: ' + (a.discovery_source_url || ''),
+    'Discovery query: ' + (a.discovery_query || ''),
+    'Discovery evidence: ' + (a.discovery_evidence || ''),
+    'Identity confidence: ' + (a.discovery_confidence || 0) + '/100',
+    'Claimed at: ' + (a.claimed_at || '')
+  ].join('\n')
+
+  const copySeed = async (a) => {
+    try {
+      await navigator.clipboard.writeText(researchSeedText(a))
+      setNotice('Research seed copied.')
+    } catch {
+      setError('Could not copy the research seed.')
+    }
+  }
 
   return (
     <section>
@@ -383,7 +409,11 @@ function Authors({ keyValue, active }) {
             <thead><tr><th>Author</th><th>Country</th><th>Genre</th><th>Source</th><th>Public email</th><th>Website</th><th>Activity</th></tr></thead>
             <tbody>
               {authors.map(a => <tr key={a.id}>
-                <td><strong>{a.name}</strong><small>#{a.id}</small></td>
+                <td>
+                  <strong>{a.name}</strong>
+                  <small>#{a.id}{a.discovery_confidence ? ' · ' + a.discovery_confidence + '% identity confidence' : ''}</small>
+                  <button className="seed-link" onClick={() => setSelectedSeed(a)}>Research Seed</button>
+                </td>
                 <td>{a.country || '—'}</td>
                 <td>{a.genre || '—'}</td>
                 <td>
@@ -400,6 +430,37 @@ function Authors({ keyValue, active }) {
           </table>
         </div>}
       </div>
+
+      {selectedSeed && <div className="panel research-seed-panel">
+        <div className="panel-head">
+          <div>
+            <span className="kicker">Fast Scout handoff</span>
+            <h2>{selectedSeed.name}</h2>
+            <p className="muted">This is the lightweight evidence pack saved during discovery. Deep research should start from this evidence rather than rediscovering the author from zero.</p>
+          </div>
+          <button className="button button-quiet" onClick={() => setSelectedSeed(null)}>Close</button>
+        </div>
+        <div className="seed-grid">
+          <div><span>Country / market</span><strong>{selectedSeed.country || 'Not established yet'}</strong></div>
+          <div><span>Genre / category</span><strong>{selectedSeed.genre || 'Not established yet'}</strong></div>
+          <div><span>Platform</span><strong>{selectedSeed.discovery_platform || 'Unknown'}</strong></div>
+          <div><span>Source type</span><strong>{(selectedSeed.discovery_source_type || 'web search').replaceAll('_',' ')}</strong></div>
+          <div><span>Identity confidence</span><strong>{selectedSeed.discovery_confidence || 0}/100</strong></div>
+          <div><span>Claimed</span><strong>{fmt(selectedSeed.claimed_at)}</strong></div>
+        </div>
+        <div className="seed-field">
+          <span>Discovery query</span>
+          <p>{selectedSeed.discovery_query || 'No query recorded.'}</p>
+        </div>
+        <div className="seed-field">
+          <span>Discovery evidence</span>
+          <p>{selectedSeed.discovery_evidence || 'No source snippet was available.'}</p>
+        </div>
+        <div className="seed-actions">
+          {selectedSeed.discovery_source_url && <a className="button button-quiet" target="_blank" rel="noreferrer" href={selectedSeed.discovery_source_url}>Open original source ↗</a>}
+          <button className="button button-primary" onClick={() => copySeed(selectedSeed)}>Copy Research Seed</button>
+        </div>
+      </div>}
     </section>
   )
 }
