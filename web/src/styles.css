@@ -352,3 +352,24 @@ tbody tr:hover{background:#fff9d9}
 .scout-time-progress{margin-top:10px}
 .job-time-row{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:6px;color:#7f7c72;font-size:9px}
 .job-time-row span:last-child{font-weight:700;color:#4d4b44}
+
+.filter-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:12px}
+.filter-head p{margin:3px 0 0;color:#7c796f;font-size:9px;line-height:1.45}
+.strict-badge{display:inline-flex;align-items:center;border:1px solid #dfd7a8;background:#fff4b8;border-radius:999px;padding:6px 9px;font-size:8px;font-weight:800;white-space:nowrap}
+.scout-filter-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.scout-filter-grid.extra{margin-top:10px;padding-top:10px;border-top:1px solid #ebe7dc}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label,.field-small label{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#757269}
+.field input,.field select,.field textarea{width:100%;box-sizing:border-box;border:1px solid #dedbd1;background:#fff;border-radius:12px;padding:10px 11px;color:#2d2c28;font:inherit;outline:none}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:#c7b552;box-shadow:0 0 0 3px rgba(246,218,99,.2)}
+.filter-toggle{margin:10px 0 0;padding:0;border:0;background:transparent;color:#58564f;font-size:9px;font-weight:750;cursor:pointer}
+.filter-toggle span{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:4px;border-radius:50%;background:#efede5}
+.scout-instructions{margin-top:12px}
+.scout-instructions label span{font-weight:500;text-transform:none;letter-spacing:0;color:#9b988f}
+.page-head-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+@media(max-width:760px){
+  .scout-filter-grid{grid-template-columns:1fr}
+  .filter-head{flex-direction:column}
+  .page-head-actions{width:100%}
+  .page-head-actions .search-box{flex:1;min-width:180px}
+}
