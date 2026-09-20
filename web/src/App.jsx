@@ -118,18 +118,18 @@ function Dashboard({ keyValue, session }) {
     <section>
       <div className="page-head">
         <div>
-          <div className="eyebrow">Workspace overview</div>
-          <h1>{session?.team?.name || 'Author Scout'}</h1>
-          <p>Live research, qualified authors, connection intelligence and outreach activity.</p>
+          <div className="eyebrow">{session?.team?.name || 'Author Scout'} workspace</div>
+          <h1>Welcome in, {session?.user?.first_name || session?.user?.username || 'there'}</h1>
+          <p>Your author research, outreach and relationship pipeline in one place.</p>
         </div>
         <button className="button button-quiet" onClick={load}>Refresh</button>
       </div>
       {error && <div className="alert alert-error">{error}</div>}
       <div className="metric-grid">
-        <Metric label="Qualified authors" value={c.authors} sub="Saved to your team" />
-        <Metric label="Research running" value={c.jobs_queued} sub="Queued or processing" />
-        <Metric label="Ready connections" value={c.connections_ready} sub="Available now" />
-        <Metric label="Messages ready" value={c.messages_ready} sub="Waiting for outreach" />
+        <Metric label="Authors" value={c.authors} sub="Qualified and saved" />
+        <Metric label="Research" value={c.jobs_queued} sub="Running now" />
+        <Metric label="Connections" value={c.connections_ready} sub="Ready to review" />
+        <Metric label="Messages" value={c.messages_ready} sub="Ready for outreach" />
       </div>
       <div className="two-col">
         <div className="panel">
@@ -157,9 +157,9 @@ function Dashboard({ keyValue, session }) {
       </div>
       <div className="panel callout">
         <div>
-          <span className="kicker">How this version works</span>
-          <h2>Searches no longer block the interface.</h2>
-          <p>A research request becomes a queued job immediately. Render workers research in the background while this dashboard remains usable.</p>
+          <span className="kicker">Research flow</span>
+          <h2>Research keeps moving while you work.</h2>
+          <p>Start a search, leave it running, and come back to qualified authors when they are ready.</p>
         </div>
         <div className="flow">
           <span>Query</span><b>→</b><span>Queue</span><b>→</b><span>Workers</span><b>→</b><span>Verify</span><b>→</b><span>Ready</span>
