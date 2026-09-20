@@ -50,6 +50,7 @@ SOURCE_INDEX_CONCURRENCY = max(2, min(16, int(os.getenv("SOURCE_INDEX_CONCURRENC
 SOURCE_INDEX_DEMANDS_PER_CYCLE = max(1, min(20, int(os.getenv("SOURCE_INDEX_DEMANDS_PER_CYCLE", "6"))))
 SOURCE_INDEX_SOURCE_PAGES_PER_DEMAND = max(1, min(10, int(os.getenv("SOURCE_INDEX_SOURCE_PAGES_PER_DEMAND", "4"))))
 SOURCE_INDEX_PREVERIFY_PER_CYCLE = max(1, min(50, int(os.getenv("SOURCE_INDEX_PREVERIFY_PER_CYCLE", "16"))))
+SOURCE_INDEX_PREVERIFY_ENABLED = os.getenv("SOURCE_INDEX_PREVERIFY_ENABLED", "false").strip().lower() in {"1","true","yes","on"}
 SOURCE_INDEX_POOL_TARGET = max(50, int(os.getenv("SOURCE_INDEX_POOL_TARGET_PER_MARKET", "300")))
 SOURCE_INDEX_DEFAULT_COUNTRIES = [x.strip() for x in os.getenv(
     "SOURCE_INDEX_DEFAULT_COUNTRIES",
@@ -710,7 +711,8 @@ async def source_index_worker():
                         WHERE status IN ('verified','discovered') AND (:c='' OR lower(country)=lower(:c))""",c=d.get("country") or "")
                     if int((current or {"c":0})["c"]) < SOURCE_INDEX_POOL_TARGET:
                         await _index_demand(d)
-                    await _preverify_pool(d,SOURCE_INDEX_PREVERIFY_PER_CYCLE)
+                    if SOURCE_INDEX_PREVERIFY_ENABLED:
+                        await _preverify_pool(d,SOURCE_INDEX_PREVERIFY_PER_CYCLE)
                 except Exception as e:
                     print(f"SOURCE_INDEX_DEMAND_ERROR {type(e).__name__}: {e}")
             await asyncio.sleep(SOURCE_INDEX_INTERVAL)
@@ -1112,15 +1114,15 @@ def _auth_team(ctx: dict, requested_team_id: int | None=None) -> dict:
         raise legacy.HTTPException(status_code=404,detail="Team not found")
     return t
 
-def _job_row(job_id: int, team_id: int):
-    return legacy.row("SELECT * FROM web_research_jobs WHERE id=:i AND team_id=:t",i=job_id,t=team_id)
+def _job_row(job_id: int, user_id: int):
+    return legacy.row("SELECT * FROM web_research_jobs WHERE id=:i AND requested_by_user_id=:u",i=job_id,u=user_id)
 
-def _job_results(job_id: int, team_id: int, limit: int=200):
+def _job_results(job_id: int, user_id: int, limit: int=200):
     return legacy.rows("""SELECT p.*,r.position FROM web_research_job_results r
         JOIN prospects p ON p.id=r.prospect_id
         JOIN web_research_jobs j ON j.id=r.job_id
-        WHERE r.job_id=:j AND j.team_id=:t
-        ORDER BY r.position ASC,r.id ASC LIMIT :n""",j=job_id,t=team_id,n=limit)
+        WHERE r.job_id=:j AND j.requested_by_user_id=:u AND p.claimed_by_user_id=:u
+        ORDER BY r.position ASC,r.id ASC LIMIT :n""",j=job_id,u=user_id,n=limit)
 
 async def _run_web_research_job(job: dict):
     jid=int(job["id"]);team_id=int(job["team_id"]);uid=int(job["requested_by_user_id"])
@@ -1216,15 +1218,15 @@ async def web_session(request: legacy.Request):
 
 @app.get("/api/v1/dashboard")
 async def web_dashboard(request: legacy.Request):
-    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"]);uid=int(ctx.get("uid") or 0)
     counts={
-        "authors":int((legacy.row("SELECT COUNT(*) c FROM prospects WHERE claimed_team_id=:t",t=tid) or {"c":0})["c"]),
-        "jobs_queued":int((legacy.row("SELECT COUNT(*) c FROM web_research_jobs WHERE team_id=:t AND status IN ('queued','starting','running')",t=tid) or {"c":0})["c"]),
-        "jobs_completed":int((legacy.row("SELECT COUNT(*) c FROM web_research_jobs WHERE team_id=:t AND status='completed'",t=tid) or {"c":0})["c"]),
-        "connections_ready":int((legacy.row("SELECT COUNT(*) c FROM connection_assignments WHERE team_id=:t AND status IN ('ready','saved')",t=tid) or {"c":0})["c"]),
-        "connections_done":int((legacy.row("SELECT COUNT(*) c FROM connection_assignments WHERE team_id=:t AND status='connected'",t=tid) or {"c":0})["c"]),
-        "messages_ready":int((legacy.row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND status='ready'",t=tid) or {"c":0})["c"]),
-        "messages_sent":int((legacy.row("SELECT COUNT(*) c FROM messages WHERE team_id=:t AND status='sent'",t=tid) or {"c":0})["c"]),
+        "authors":int((legacy.row("SELECT COUNT(*) c FROM prospects WHERE claimed_by_user_id=:u",u=uid) or {"c":0})["c"]),
+        "jobs_queued":int((legacy.row("SELECT COUNT(*) c FROM web_research_jobs WHERE requested_by_user_id=:u AND status IN ('queued','starting','running')",u=uid) or {"c":0})["c"]),
+        "jobs_completed":int((legacy.row("SELECT COUNT(*) c FROM web_research_jobs WHERE requested_by_user_id=:u AND status='completed'",u=uid) or {"c":0})["c"]),
+        "connections_ready":int((legacy.row("SELECT COUNT(*) c FROM connection_assignments WHERE assigned_user_id=:u AND status IN ('ready','saved')",u=uid) or {"c":0})["c"]),
+        "connections_done":int((legacy.row("SELECT COUNT(*) c FROM connection_assignments WHERE assigned_user_id=:u AND status='connected'",u=uid) or {"c":0})["c"]),
+        "messages_ready":int((legacy.row("SELECT COUNT(*) c FROM messages WHERE imported_by_user_id=:u AND status='ready'",u=uid) or {"c":0})["c"]),
+        "messages_sent":int((legacy.row("SELECT COUNT(*) c FROM messages WHERE imported_by_user_id=:u AND status='sent'",u=uid) or {"c":0})["c"]),
     }
     pool={
         "candidates":int((legacy.row("SELECT COUNT(*) c FROM author_candidate_pool WHERE status IN ('discovered','verified')") or {"c":0})["c"]),
@@ -1261,30 +1263,30 @@ async def web_create_job(request: legacy.Request):
 
 @app.get("/api/v1/research/jobs")
 async def web_jobs(request: legacy.Request, limit: int=30):
-    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0)
     limit=max(1,min(100,int(limit)))
-    jobs=legacy.rows("""SELECT * FROM web_research_jobs WHERE team_id=:t
-        ORDER BY id DESC LIMIT :n""",t=tid,n=limit)
+    jobs=legacy.rows("""SELECT * FROM web_research_jobs WHERE requested_by_user_id=:u
+        ORDER BY id DESC LIMIT :n""",u=uid,n=limit)
     return {"ok":True,"jobs":jobs}
 
 @app.get("/api/v1/research/jobs/{job_id}")
 async def web_job(request: legacy.Request, job_id: int):
-    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
-    job=_job_row(job_id,tid)
+    ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0)
+    job=_job_row(job_id,uid)
     if not job:raise legacy.HTTPException(status_code=404,detail="Research job not found")
-    return {"ok":True,"job":job,"results":_job_results(job_id,tid)}
+    return {"ok":True,"job":job,"results":_job_results(job_id,uid)}
 
 @app.get("/api/v1/authors")
 async def web_authors(request: legacy.Request, limit: int=100, search: str=""):
-    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0)
     limit=max(1,min(500,int(limit)))
     if search.strip():
         term="%"+search.strip().lower()+"%"
-        rs=legacy.rows("""SELECT * FROM prospects WHERE claimed_team_id=:t AND
+        rs=legacy.rows("""SELECT * FROM prospects WHERE claimed_by_user_id=:u AND
             (lower(name) LIKE :q OR lower(country) LIKE :q OR lower(genre) LIKE :q OR lower(email) LIKE :q)
-            ORDER BY id DESC LIMIT :n""",t=tid,q=term,n=limit)
+            ORDER BY id DESC LIMIT :n""",u=uid,q=term,n=limit)
     else:
-        rs=legacy.rows("SELECT * FROM prospects WHERE claimed_team_id=:t ORDER BY id DESC LIMIT :n",t=tid,n=limit)
+        rs=legacy.rows("SELECT * FROM prospects WHERE claimed_by_user_id=:u ORDER BY id DESC LIMIT :n",u=uid,n=limit)
     return {"ok":True,"authors":rs}
 
 
