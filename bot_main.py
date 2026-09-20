@@ -510,14 +510,15 @@ def style_sheet(ws, widths=None):
 async def export_chatgpt(chat,uid):
     t=team(uid)
     if not t:return await send(chat,"Join/create a team first.")
-    ps=rows("SELECT * FROM prospects WHERE claimed_team_id=:t ORDER BY id",t=t["id"])
+    ps=rows("SELECT * FROM prospects WHERE claimed_by_user_id=:u ORDER BY id",u=uid)
     if not ps:return await send(chat,"No authors to export yet. Scout authors first.")
     wb=Workbook(); ws=wb.active; ws.title="Authors & Messages"
     seed_headers=[
         "Source Row ID","Canonical Author ID","Author Name — Bot","Country — Bot","Genre — Bot",
         "Official Website — Bot","Public Professional Email — Bot","Email Source URL — Bot",
         "Email Verification Status — Bot","Bio / Research Seed — Bot","Books — Bot",
-        "Recent Activity — Bot","Source URLs — Bot","Claimed At — Bot"
+        "Recent Activity — Bot","Source URLs — Bot","Discovery Platform — Bot","Discovery Source Type — Bot",
+        "Discovery Source URL — Bot","Discovery Query — Bot","Discovery Evidence — Bot","Discovery Confidence — Bot","Claimed At — Bot"
     ]
     enriched=[
         "Processing Status","Duplicate Of","Author Name — Verified","Country — Verified",
@@ -545,7 +546,9 @@ async def export_chatgpt(chat,uid):
         except:srcs=p.get("source_urls") or ""
         ws.append([
             f"AS-{p['id']}",f"AS-{p['id']}",p["name"],p["country"],p["genre"],p["website"],p["email"],
-            p["email_source_url"],p["verification_status"],p["bio"],p["books"],p["recent_activity"],srcs,p["claimed_at"]
+            p["email_source_url"],p["verification_status"],p["bio"],p["books"],p["recent_activity"],srcs,
+            p.get("discovery_platform",""),p.get("discovery_source_type",""),p.get("discovery_source_url",""),
+            p.get("discovery_query",""),p.get("discovery_evidence",""),p.get("discovery_confidence",0),p["claimed_at"]
         ]+[""]*len(enriched))
     style_sheet(ws)
     for i,h in enumerate(seed_headers+enriched,1):
@@ -1192,8 +1195,15 @@ async def handle(up):
         d=await research(arg);pid,created,ex=claim(uid,t["id"],d)
         return await send(chat,f"✅ Claimed {esc(d['name'])}" if created else f"⚠️ Already scouted: {esc(ex['name'])}")
     if cmd=="/authors":
-        t=team(uid);ps=rows("SELECT * FROM prospects WHERE claimed_team_id=:t ORDER BY id DESC LIMIT 30",t=t["id"]) if t else []
-        return await send(chat,"\n".join([f"• {esc(p['name'])} — {esc(p['email'] or 'no email')}" for p in ps]) or "No authors.")
+        ps=rows("SELECT * FROM prospects WHERE claimed_by_user_id=:u ORDER BY id DESC LIMIT 30",u=uid)
+        if not ps:return await send(chat,"No authors yet. Start a Scout in the web app and your claimed authors will appear here as they are found.")
+        total=int((row("SELECT COUNT(*) c FROM prospects WHERE claimed_by_user_id=:u",u=uid) or {"c":0})["c"])
+        lines=[f"<b>📚 My Authors</b> — {total} total"]
+        for p in ps:
+            source=p.get("discovery_platform") or p.get("discovery_source_type") or "source saved"
+            lines.append(f"• <b>{esc(p['name'])}</b> — {esc(p.get('country') or 'market pending')} — {esc(source)}")
+        if total>len(ps):lines.append(f"\nShowing latest {len(ps)} of {total}. Use /export for the full author file.")
+        return await send(chat,"\n".join(lines))
     if cmd=="/export":return await export_chatgpt(chat,uid)
     if cmd=="/brief":return await send_brief(chat,uid)
     if cmd=="/lastsearch":return await last_search(chat,uid)
