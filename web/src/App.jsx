@@ -157,6 +157,24 @@ function Login({ onLogin, busy, error }) {
 function Dashboard({ keyValue, session, active }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
+  const downloadAuthors = async () => {
+    setError('')
+    try {
+      const res = await fetch(API_BASE + '/api/v1/authors/export.csv', {
+        headers: { 'X-Author-Scout-Key': keyValue }
+      })
+      if (!res.ok) throw new Error('Could not download authors')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'author-scout-my-authors.csv'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) { setError(e.message) }
+  }
   const load = useCallback(async () => {
     try { setData(await request('/api/v1/dashboard', keyValue)); setError('') }
     catch (e) { setError(e.message) }
@@ -222,6 +240,8 @@ function Dashboard({ keyValue, session, active }) {
 
 function Research({ keyValue, active }) {
   const [query, setQuery] = useState('')
+  const [filters, setFilters] = useState({ name:'', country:'', genre:'', gender:'any', language:'', year:'2026' })
+  const [showMoreFilters, setShowMoreFilters] = useState(false)
   const [duration, setDuration] = useState(10)
   const [jobs, setJobs] = useState([])
   const [selected, setSelected] = useState(null)
@@ -244,14 +264,17 @@ function Research({ keyValue, active }) {
 
   usePolling(loadJobs, 4000, active)
 
+  const hasScoutCriteria = query.trim() || Object.entries(filters).some(([k,v]) => k !== 'gender' && String(v || '').trim()) || filters.gender !== 'any'
+  const setFilter = (key, value) => setFilters(prev => ({ ...prev, [key]: value }))
+
   const create = async (e) => {
     e.preventDefault()
-    if (!query.trim()) return
-    setCreating(true); setError('')
+    if (!hasScoutCriteria) return
+    setCreating(true); setError(''); setNotice('')
     try {
       const d = await request('/api/v1/research/jobs', keyValue, {
         method: 'POST',
-        body: JSON.stringify({ query: query.trim(), duration_minutes: Number(duration) || 10 })
+        body: JSON.stringify({ query: query.trim(), filters, duration_minutes: Number(duration) || 10 })
       })
       setQuery('')
       await loadJobs()
@@ -290,13 +313,64 @@ function Research({ keyValue, active }) {
 
       <div className="panel research-compose">
         <form onSubmit={create}>
-          <label>What authors do you want to find?</label>
-          <textarea
-            rows="4"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="Example: emerging male fantasy authors in Canada, active in 2026, low to medium saturation"
-          />
+          <div className="filter-head">
+            <div>
+              <label>Scout filters</label>
+              <p>Structured filters are enforced before an author is claimed. Country is a hard filter when provided.</p>
+            </div>
+            <span className="strict-badge">Strict matching</span>
+          </div>
+
+          <div className="scout-filter-grid">
+            <div className="field">
+              <label>Country</label>
+              <input list="scout-countries" value={filters.country} onChange={e => setFilter('country', e.target.value)} placeholder="Spain" />
+              <datalist id="scout-countries">
+                {['United States','United Kingdom','Canada','Australia','France','Germany','Austria','United Arab Emirates','New Zealand','Spain','Iceland','Saudi Arabia','Portugal','Italy','Netherlands','Belgium','Switzerland','Sweden','Norway','Denmark','Finland','Ireland','India','Japan','South Korea','Singapore','South Africa','Nigeria','Ghana','Kenya','Mexico','Brazil','Argentina','Chile','Colombia'].map(x => <option key={x} value={x} />)}
+              </datalist>
+            </div>
+            <div className="field">
+              <label>Genre</label>
+              <input value={filters.genre} onChange={e => setFilter('genre', e.target.value)} placeholder="Historical fiction" />
+            </div>
+            <div className="field">
+              <label>Gender</label>
+              <select value={filters.gender} onChange={e => setFilter('gender', e.target.value)}>
+                <option value="any">Any</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="button" className="filter-toggle" onClick={() => setShowMoreFilters(v => !v)}>
+            {showMoreFilters ? 'Hide extra filters' : 'More filters'} <span>{showMoreFilters ? '−' : '+'}</span>
+          </button>
+
+          {showMoreFilters && <div className="scout-filter-grid extra">
+            <div className="field">
+              <label>Name contains</label>
+              <input value={filters.name} onChange={e => setFilter('name', e.target.value)} placeholder="Optional author name" />
+            </div>
+            <div className="field">
+              <label>Language</label>
+              <input value={filters.language} onChange={e => setFilter('language', e.target.value)} placeholder="Spanish" />
+            </div>
+            <div className="field">
+              <label>Activity year</label>
+              <input value={filters.year} onChange={e => setFilter('year', e.target.value)} placeholder="2026" />
+            </div>
+          </div>}
+
+          <div className="field scout-instructions">
+            <label>Additional instructions <span>optional</span></label>
+            <textarea
+              rows="3"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Example: emerging or mid-list, active recently, avoid celebrity authors, low outreach saturation"
+            />
+          </div>
           <div className="compose-row">
             <div className="field-small">
               <label>Scout duration</label>
@@ -316,7 +390,7 @@ function Research({ keyValue, active }) {
               </select>
             </div>
             <div className="compose-hint">Discovery only. The target ceiling is up to 300 unique authors/hour when the market has enough usable sources. Long Scouts continue in the background, and you can use the rest of Author Scout normally.</div>
-            <button className="button button-primary" disabled={creating || !query.trim()}>
+            <button className="button button-primary" disabled={creating || !hasScoutCriteria}>
               {creating ? 'Starting…' : 'Start Scout'}
             </button>
           </div>
@@ -439,7 +513,10 @@ function Authors({ keyValue, active }) {
     <section>
       <div className="page-head">
         <div><div className="eyebrow">My author library</div><h1>My Authors</h1><p>Authors exclusively claimed to your Author Scout account.</p></div>
-        <input className="search-box" placeholder="Search authors…" value={search} onChange={e => setSearch(e.target.value)} />
+        <div className="page-head-actions">
+          <input className="search-box" placeholder="Search authors…" value={search} onChange={e => setSearch(e.target.value)} />
+          <button className="button button-primary" onClick={downloadAuthors}>Download CSV</button>
+        </div>
       </div>
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <div className="alert alert-error">{error}</div>}
