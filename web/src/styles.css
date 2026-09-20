@@ -90,6 +90,8 @@ code{font-family:"SFMono-Regular",Consolas,monospace}
 .mobile-nav{display:none}
 
 main{min-width:0;padding:20px 24px 34px}
+.page-view{display:none}
+.page-view.active{display:block}
 .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:20px}
 .page-head h1{font-size:34px;line-height:1.05;letter-spacing:-.045em;font-weight:500;margin:4px 0 8px}
 .page-head p{margin:0;color:#7d7c74;max-width:760px;font-size:12px;line-height:1.55}
