@@ -675,40 +675,48 @@ export default function App() {
 
   if (!session) return <Login onLogin={verify} busy={checking} error={loginError} />
 
+  const displayName = session.user?.first_name || session.user?.username || 'Team member'
+  const initials = String(displayName || 'AS').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase()
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">AS</div>
-          <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
-        </div>
-        <nav>
-          {NAV.map(([id,label,icon]) => <button key={id} onClick={() => setTab(id)} className={tab === id ? 'active' : ''}><span>{icon}</span>{label}</button>)}
-        </nav>
-        <div className="sidebar-foot">
-          <div className="workspace-card">
-            <span>Workspace</span>
-            <strong>{session.team?.name}</strong>
-            <small>{session.user?.first_name || session.user?.username || 'Team access'}</small>
+    <div className="app-frame">
+      <div className="app-shell">
+        <header className="topbar">
+          <button className="logo-pill" onClick={() => setTab('dashboard')}>Author Scout</button>
+
+          <nav className="topnav" aria-label="Primary navigation">
+            {NAV.map(([id,label]) => (
+              <button key={id} onClick={() => setTab(id)} className={tab === id ? 'active' : ''}>
+                {label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="top-actions">
+            <div className="workspace-summary">
+              <span>{session.team?.name || 'Workspace'}</span>
+              <small>{displayName}</small>
+            </div>
+            <button className="avatar-button" onClick={logout} title="Sign out">{initials}</button>
           </div>
-          <button className="logout" onClick={logout}>Sign out</button>
-        </div>
-      </aside>
-      <main>
-        <div className="mobile-top">
-          <div className="brand-mark">AS</div>
+        </header>
+
+        <div className="mobile-nav">
           <select value={tab} onChange={e => setTab(e.target.value)}>
             {NAV.map(([id,label]) => <option key={id} value={id}>{label}</option>)}
           </select>
-          <button onClick={logout}>Exit</button>
+          <button className="button button-quiet" onClick={logout}>Sign out</button>
         </div>
-        {tab === 'dashboard' && <Dashboard keyValue={keyValue} session={session} />}
-        {tab === 'research' && <Research keyValue={keyValue} />}
-        {tab === 'authors' && <Authors keyValue={keyValue} />}
-        {tab === 'messages' && <Messages keyValue={keyValue} />}
-        {tab === 'connections' && <Connections keyValue={keyValue} />}
-        {tab === 'system' && <System keyValue={keyValue} />}
-      </main>
+
+        <main>
+          {tab === 'dashboard' && <Dashboard keyValue={keyValue} session={session} />}
+          {tab === 'research' && <Research keyValue={keyValue} />}
+          {tab === 'authors' && <Authors keyValue={keyValue} />}
+          {tab === 'messages' && <Messages keyValue={keyValue} />}
+          {tab === 'connections' && <Connections keyValue={keyValue} />}
+          {tab === 'system' && <System keyValue={keyValue} />}
+        </main>
+      </div>
     </div>
   )
 }
