@@ -1061,9 +1061,6 @@ def _web_auth_from_key(key: str) -> dict:
     key=(key or "").strip()
     if not key:
         raise legacy.HTTPException(status_code=401, detail="Missing web access key")
-    # Owner/admin fallback for local testing.
-    if key == legacy.APP_SECRET and key != "change-me":
-        return {"scope":"web","admin":True,"team_id":None,"uid":None}
     try:
         payload=legacy.serializer.loads(key,max_age=WEB_KEY_MAX_AGE_SECONDS)
     except Exception:
