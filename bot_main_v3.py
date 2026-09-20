@@ -1669,7 +1669,8 @@ async def web_message_status(request: legacy.Request, message_id: int):
             WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",d=t,i=message_id,u=uid)
     elif action=="ready":
         legacy.execq("""UPDATE messages SET status='ready',sent_by_user_id=NULL,sent_at='',
-            sender_email='',sent_via='',auto_sent=0,updated_at=:d WHERE id=:i AND team_id=:t""",
+            sender_email='',sent_via='',auto_sent=0,updated_at=:d
+            WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",
             d=t,i=message_id,u=uid)
     else:
         raise legacy.HTTPException(status_code=400,detail="Status must be sent, replied, or ready")
