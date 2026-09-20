@@ -56,9 +56,11 @@ SOURCE_INDEX_DEFAULT_COUNTRIES = [x.strip() for x in os.getenv(
     "SOURCE_INDEX_DEFAULT_COUNTRIES",
     "United Kingdom,United States,Canada,Australia,France,Germany,Austria,United Arab Emirates,New Zealand,Spain,Iceland"
 ).split(",") if x.strip()]
-WEB_RESEARCH_JOB_CONCURRENCY = max(1, min(4, int(os.getenv("WEB_RESEARCH_JOB_CONCURRENCY", "2"))))
+WEB_RESEARCH_JOB_CONCURRENCY = max(1, min(12, int(os.getenv("WEB_RESEARCH_JOB_CONCURRENCY", "4"))))
 WEB_RESEARCH_POLL_SECONDS = max(2, int(os.getenv("WEB_RESEARCH_POLL_SECONDS", "4")))
-WEB_MAX_RESEARCH_COUNT = max(1, min(100, int(os.getenv("WEB_MAX_RESEARCH_COUNT", "50"))))
+WEB_MAX_RESEARCH_COUNT = max(1, min(600, int(os.getenv("WEB_MAX_RESEARCH_COUNT", "300"))))
+SCOUT_TARGET_PER_HOUR = max(30, min(600, int(os.getenv("SCOUT_TARGET_PER_HOUR", "300"))))
+SCOUT_MAX_MINUTES = max(1, min(120, int(os.getenv("SCOUT_MAX_MINUTES", "60"))))
 WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
 
 
@@ -285,6 +287,8 @@ def init_connection_db() -> None:
             parsed_spec TEXT NOT NULL DEFAULT '{{}}',
             status TEXT NOT NULL DEFAULT 'queued',
             requested_count INTEGER NOT NULL DEFAULT 10,
+            duration_minutes INTEGER NOT NULL DEFAULT 5,
+            target_per_hour INTEGER NOT NULL DEFAULT 300,
             progress_text TEXT DEFAULT '',
             raw_results INTEGER NOT NULL DEFAULT 0,
             candidates INTEGER NOT NULL DEFAULT 0,
@@ -311,6 +315,15 @@ def init_connection_db() -> None:
     with legacy.engine.begin() as c:
         for s in stmts:
             c.execute(text(s))
+    for alter in [
+        "ALTER TABLE web_research_jobs ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 5",
+        "ALTER TABLE web_research_jobs ADD COLUMN target_per_hour INTEGER NOT NULL DEFAULT 300"
+    ]:
+        try:
+            with legacy.engine.begin() as c:
+                c.execute(text(alter))
+        except Exception:
+            pass
 
 
 def _cache_get(key: str):
@@ -1078,6 +1091,94 @@ async def fast_find_authors(spec, progress=None):
     }
 
 
+async def fast_scout_authors(spec: dict, limit: int=25, progress=None):
+    """Discovery-only scout. Finds plausible author identities and source evidence.
+
+    It intentionally does not perform contact/email/activity research. That belongs
+    to the later deep research + messaging stage.
+    """
+    limit=max(1,min(100,int(limit or 25)))
+    country=spec.get("country","")
+    genre=spec.get("genre","")
+    gender=spec.get("gender","any")
+    language=spec.get("language","")
+    name_filter=spec.get("name","")
+    free_query=spec.get("query","")
+    country_term=_COUNTRY_ALIASES.get((country or "").strip().lower(),country)
+    await asyncio.to_thread(_record_search_demand,spec)
+
+    existing=await asyncio.to_thread(legacy.rows,"SELECT normalized_key,name,country FROM prospects")
+    existing_names={_norm_author_name(r.get("name") or "") for r in existing}
+
+    def make_candidate(p):
+        source_url=(p.get("discovery_url") or p.get("source_url") or "").strip()
+        return {
+            "name":p.get("name") or "",
+            "country":p.get("country") or country_term or "",
+            "genre":p.get("genre") or genre or "",
+            "website":"",
+            "email":"",
+            "email_source_url":"",
+            "verification_status":"discovered",
+            "bio":"",
+            "books":"",
+            "recent_activity":"",
+            "source_urls":[source_url] if source_url else [],
+            "discovery_source_url":source_url,
+            "discovery_platform":p.get("source_domain") or legacy.host(source_url) or "",
+            "discovery_source_type":p.get("source_type") or "web_search",
+        }
+
+    def eligible(p):
+        n=(p.get("name") or "").strip()
+        nk=_norm_author_name(n)
+        if not nk or nk in existing_names:return False
+        if not _author_candidate_quality(n,p.get("discovery_url") or "",p.get("snippet") or ""):return False
+        if name_filter and name_filter.lower() not in n.lower():return False
+        return True
+
+    pool=await asyncio.to_thread(_pool_candidates,spec,max(limit*12,160))
+    out=[];seen=set()
+    for p in pool:
+        if not eligible(p):continue
+        nk=_norm_author_name(p.get("name") or "")
+        if nk in seen:continue
+        seen.add(nk);out.append(make_candidate(p))
+        if len(out)>=limit:break
+
+    if len(out)<limit:
+        demand={
+            "country":country_term or country,
+            "genre":genre,
+            "query_text":free_query,
+            "name_filter":name_filter,
+            "language":language,
+            "gender":gender,
+        }
+        try:
+            await _index_demand(demand)
+        except Exception as e:
+            print(f"SCOUT_INDEX_ERROR {type(e).__name__}: {e}")
+
+        pool=await asyncio.to_thread(_pool_candidates,spec,max(limit*16,220))
+        for p in pool:
+            if len(out)>=limit:break
+            if not eligible(p):continue
+            nk=_norm_author_name(p.get("name") or "")
+            if nk in seen:continue
+            seen.add(nk);out.append(make_candidate(p))
+
+    if progress:
+        await progress(f"Scouting: {len(out)} new candidate authors ready to claim")
+    return out,{
+        "raw_results":len(out),
+        "candidates":len(pool),
+        "checked":len(out),
+        "query":free_query or country_term or genre or "authors",
+        "discovery_only":True
+    }
+
+
 legacy.research = fast_research
 legacy.find_authors = fast_find_authors
 
@@ -1141,46 +1242,70 @@ async def _run_web_research_job(job: dict):
     jid=int(job["id"]);team_id=int(job["team_id"]);uid=int(job["requested_by_user_id"])
     try:
         spec=json.loads(job.get("parsed_spec") or "{}")
+        duration=max(1,min(SCOUT_MAX_MINUTES,int(job.get("duration_minutes") or 5)))
+        target_rate=max(30,min(600,int(job.get("target_per_hour") or SCOUT_TARGET_PER_HOUR)))
+        cap=max(1,min(WEB_MAX_RESEARCH_COUNT,int(job.get("requested_count") or max(5,round(duration*target_rate/60)))))
         legacy.execq("""UPDATE web_research_jobs SET status='running',started_at=:d,
-            progress_text='Starting research',error='',updated_at=:d WHERE id=:i""",d=legacy.iso(),i=jid)
+            progress_text=:p,error='',updated_at=:d WHERE id=:i""",
+            d=legacy.iso(),p=f"Scouting for up to {duration} minute(s)",i=jid)
 
+        deadline=time.monotonic()+duration*60
+        accepted=duplicates=raw_results=candidates=checked=0
+        position=0
         last_progress_at=0.0
+
         async def progress(message):
             nonlocal last_progress_at
             now_mono=time.monotonic()
-            if now_mono-last_progress_at < 1.5:
-                return
+            if now_mono-last_progress_at < 1.0:return
             last_progress_at=now_mono
+            remaining=max(0,int(deadline-now_mono))
             clean=re.sub(r"<[^>]+>","",str(message or ""))
-            legacy.execq("UPDATE web_research_jobs SET progress_text=:p,updated_at=:d WHERE id=:i",
-                         p=clean[:1200],d=legacy.iso(),i=jid)
+            legacy.execq("UPDATE web_research_jobs SET progress_text=:p,accepted=:a,duplicates=:du,raw_results=:r,candidates=:c,checked=:ch,updated_at=:d WHERE id=:i",
+                p=f"{clean} · {remaining//60}:{remaining%60:02d} remaining",a=accepted,du=duplicates,
+                r=raw_results,c=candidates,ch=checked,d=legacy.iso(),i=jid)
 
-        found,meta=await fast_find_authors(spec,progress)
-        accepted=duplicates=0
-        position=0
-        for d in found:
-            pid,created,existing=legacy.claim(uid,team_id,d)
-            if created:
-                accepted+=1;position+=1
-                try:
-                    legacy.execq("""INSERT INTO web_research_job_results(job_id,prospect_id,position,created_at)
-                        VALUES(:j,:p,:r,:d) ON CONFLICT(job_id,prospect_id) DO NOTHING""",
-                        j=jid,p=pid,r=position,d=legacy.iso())
-                except Exception:
-                    pass
+        cycle=0
+        while time.monotonic()<deadline and accepted<cap:
+            cycle+=1
+            need=min(50,max(5,cap-accepted))
+            spec["count"]=need
+            found,meta=await fast_scout_authors(spec,need,progress)
+            raw_results+=int(meta.get("raw_results") or 0)
+            candidates=max(candidates,int(meta.get("candidates") or 0))
+            checked+=int(meta.get("checked") or 0)
+
+            created_this_cycle=0
+            for d in found:
+                if time.monotonic()>=deadline or accepted>=cap:break
+                pid,created,existing=legacy.claim(uid,team_id,d)
+                if created:
+                    accepted+=1;position+=1;created_this_cycle+=1
+                    try:
+                        legacy.execq("""INSERT INTO web_research_job_results(job_id,prospect_id,position,created_at)
+                            VALUES(:j,:p,:r,:d) ON CONFLICT(job_id,prospect_id) DO NOTHING""",
+                            j=jid,p=pid,r=position,d=legacy.iso())
+                    except Exception:
+                        pass
+                else:
+                    duplicates+=1
+
+            await progress(f"Scout cycle {cycle}: {accepted} unique authors claimed")
+            if not found or created_this_cycle==0:
+                await asyncio.sleep(2)
             else:
-                duplicates+=1
+                await asyncio.sleep(0.35)
+
         legacy.execq("""UPDATE web_research_jobs SET status='completed',progress_text=:p,
             raw_results=:raw,candidates=:c,checked=:ch,accepted=:a,duplicates=:du,
             completed_at=:d,updated_at=:d WHERE id=:i""",
-            p=f"Completed: {accepted} new qualified authors",raw=int(meta.get("raw_results") or 0),
-            c=int(meta.get("candidates") or 0),ch=int(meta.get("checked") or 0),
-            a=accepted,du=duplicates,d=legacy.iso(),i=jid)
+            p=f"Completed: {accepted} unique authors claimed in {duration} minute scout",
+            raw=raw_results,c=candidates,ch=checked,a=accepted,du=duplicates,d=legacy.iso(),i=jid)
     except asyncio.CancelledError:
         raise
     except Exception as e:
         legacy.execq("""UPDATE web_research_jobs SET status='failed',error=:e,
-            progress_text='Research failed',completed_at=:d,updated_at=:d WHERE id=:i""",
+            progress_text='Scout failed',completed_at=:d,updated_at=:d WHERE id=:i""",
             e=f"{type(e).__name__}: {e}"[:1500],d=legacy.iso(),i=jid)
         print(f"WEB_RESEARCH_JOB_ERROR id={jid} {type(e).__name__}: {e}")
 
@@ -1259,20 +1384,28 @@ async def web_create_job(request: legacy.Request):
     if not legacy.find_query_is_specific(spec):
         raise legacy.HTTPException(status_code=400,detail="Search is too broad. Add a country, genre, author name, language, career stage, or activity signal.")
     try:
-        requested=int(body.get("count") or spec.get("count") or 10)
+        duration=int(body.get("duration_minutes") or 5)
     except Exception:
-        requested=10
-    requested=max(1,min(WEB_MAX_RESEARCH_COUNT,requested))
-    spec["count"]=requested
+        duration=5
+    duration=max(1,min(SCOUT_MAX_MINUTES,duration))
+    target_rate=SCOUT_TARGET_PER_HOUR
+    requested=max(1,min(WEB_MAX_RESEARCH_COUNT,round(duration*target_rate/60)))
+    spec["count"]=min(50,requested)
     uid=int(ctx.get("uid") or team.get("owner_user_id") or 0)
+    active=legacy.row("""SELECT id FROM web_research_jobs WHERE requested_by_user_id=:u
+        AND status IN ('queued','starting','running') ORDER BY id DESC LIMIT 1""",u=uid)
+    if active:
+        raise legacy.HTTPException(status_code=409,detail=f"You already have an active scout job #{active['id']}. Let it finish before starting another.")
     t=legacy.iso()
     with legacy.engine.begin() as c:
         r=c.execute(text("""INSERT INTO web_research_jobs(
-            team_id,requested_by_user_id,query_text,parsed_spec,status,requested_count,progress_text,created_at,updated_at)
-            VALUES(:t,:u,:q,:p,'queued',:n,'Queued for research',:d,:d) RETURNING id"""),
-            {"t":tid,"u":uid,"q":query,"p":json.dumps(spec),"n":requested,"d":t})
+            team_id,requested_by_user_id,query_text,parsed_spec,status,requested_count,duration_minutes,target_per_hour,
+            progress_text,created_at,updated_at)
+            VALUES(:t,:u,:q,:p,'queued',:n,:m,:rate,'Queued for scouting',:d,:d) RETURNING id"""),
+            {"t":tid,"u":uid,"q":query,"p":json.dumps(spec),"n":requested,"m":duration,"rate":target_rate,"d":t})
         jid=int(r.scalar_one())
-    return {"ok":True,"job_id":jid,"status":"queued","requested_count":requested}
+    return {"ok":True,"job_id":jid,"status":"queued","requested_count":requested,
+            "duration_minutes":duration,"target_per_hour":target_rate}
 
 @app.get("/api/v1/research/jobs")
 async def web_jobs(request: legacy.Request, limit: int=30):
