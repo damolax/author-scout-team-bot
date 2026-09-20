@@ -62,6 +62,7 @@ WEB_MAX_RESEARCH_COUNT = max(1, min(100000, int(os.getenv("WEB_MAX_RESEARCH_COUN
 SCOUT_TARGET_PER_HOUR = max(30, min(600, int(os.getenv("SCOUT_TARGET_PER_HOUR", "300"))))
 SCOUT_MAX_MINUTES = max(1, min(10080, int(os.getenv("SCOUT_MAX_MINUTES", "10080"))))
 WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
+AUTHOR_SCOUT_WEB_URL = os.getenv("AUTHOR_SCOUT_WEB_URL", "https://author-scout-team-bot.vercel.app").strip()
 
 
 # AUTHOR_SCOUT_WEB_CORS
@@ -2065,10 +2066,18 @@ async def connection_worker():
 
 
 def enhanced_main_menu():
-    base = _legacy_main_menu()
-    kb = list(base.get("inline_keyboard", []))
-    kb.insert(1, [{"text": "🌐 Connections", "callback_data": "conn:menu"}, {"text": "📈 Connection Status", "callback_data": "conn:status"}])
-    return {"inline_keyboard": kb}
+    return {"inline_keyboard":[
+        [{"text":"🌐 Open Author Scout Web","url":AUTHOR_SCOUT_WEB_URL}],
+        [{"text":"🔭 Scout Status","callback_data":"companion:scoutstatus"},
+         {"text":"📚 My Authors","callback_data":"companion:authors"}],
+        [{"text":"🌐 Connections","callback_data":"conn:menu"},
+         {"text":"📈 Connection Status","callback_data":"conn:status"}],
+        [{"text":"📨 Message Queue","callback_data":"menu:queue"},
+         {"text":"📬 Replies","callback_data":"menu:replies"}],
+        [{"text":"📥 Export Authors","callback_data":"menu:export"},
+         {"text":"🔗 Gmail","callback_data":"menu:gmail"}],
+        [{"text":"❓ Help","callback_data":"companion:help"}]
+    ]}
 
 
 async def show_connection_status(chat: int, uid: int):
@@ -2249,6 +2258,38 @@ _legacy_main_menu = legacy.main_menu
 legacy.main_menu = enhanced_main_menu
 
 
+async def show_user_authors(chat: int, uid: int, limit: int=20):
+    rs=legacy.rows("""SELECT * FROM prospects WHERE claimed_by_user_id=:u
+        ORDER BY id DESC LIMIT :n""",u=uid,n=limit)
+    total=int((legacy.row("SELECT COUNT(*) c FROM prospects WHERE claimed_by_user_id=:u",u=uid) or {"c":0})["c"])
+    if not rs:
+        return await legacy.send(chat,"No authors yet. Start a Scout from the web app.",enhanced_main_menu())
+    lines=[f"<b>📚 My Authors</b> — {total} total"]
+    for p in rs:
+        source=p.get("discovery_platform") or p.get("discovery_source_type") or "source saved"
+        lines.append(f"• <b>{legacy.esc(p['name'])}</b> — {legacy.esc(p.get('country') or 'market pending')} — {legacy.esc(source)}")
+    if total>len(rs):
+        lines.append(f"\nShowing latest {len(rs)}. Open the web app for the full list.")
+    return await legacy.send(chat,"\n".join(lines),enhanced_main_menu())
+
+
+async def show_companion_help(chat: int):
+    return await legacy.send(chat,
+        "<b>Author Scout Companion</b>\n\n"
+        "Use the web app for full scouting, My Authors, research, messages and settings.\n\n"
+        "<b>Telegram is for quick access and notifications:</b>\n"
+        "• /scoutstatus — active Scout progress\n"
+        "• /authors — your latest claimed authors\n"
+        "• /connections — ready LinkedIn connections\n"
+        "• /connectionstatus — connection queue status\n"
+        "• /export — export your authors for deep research\n"
+        "• /replies — reply tracking\n"
+        "• /gmail — Gmail connection\n"
+        "• /webapp — open Author Scout Web\n\n"
+        "Scout start, progress milestones, completion, stop and error events can notify you here.",
+        enhanced_main_menu())
+
+
 async def show_scout_status(chat: int, uid: int):
     job=legacy.row("""SELECT * FROM web_research_jobs WHERE requested_by_user_id=:u
         ORDER BY CASE WHEN status IN ('queued','starting','running') THEN 0 ELSE 1 END,id DESC LIMIT 1""",u=uid)
@@ -2268,6 +2309,24 @@ async def show_scout_status(chat: int, uid: int):
 
 
 async def enhanced_handle(update: dict):
+    cb=update.get("callback_query") or {}
+    cbdata=(cb.get("data") or "").strip()
+    if cbdata.startswith("companion:"):
+        user=cb.get("from") or {}
+        chat=((cb.get("message") or {}).get("chat") or {}).get("id")
+        if chat and user.get("id"):
+            uid=legacy.ensure_user(user)
+            try:
+                await legacy.tg("answerCallbackQuery",{"callback_query_id":cb.get("id")})
+            except Exception:
+                pass
+            if cbdata=="companion:scoutstatus":
+                return await show_scout_status(chat,uid)
+            if cbdata=="companion:authors":
+                return await show_user_authors(chat,uid)
+            if cbdata=="companion:help":
+                return await show_companion_help(chat)
+
     if await handle_connection_callback(update):
         return
     m = update.get("message") or {}
@@ -2288,6 +2347,14 @@ async def enhanced_handle(update: dict):
         arg = parts[1] if len(parts) > 1 else ""
         if chat and u.get("id"):
             uid = legacy.ensure_user(u)
+            if cmd == "/webapp":
+                return await legacy.send(chat,"Open Author Scout Web:",{"inline_keyboard":[[{"text":"🌐 Open Author Scout","url":AUTHOR_SCOUT_WEB_URL}]]})
+            if cmd == "/menu":
+                return await legacy.send(chat,"<b>Author Scout Companion</b>",enhanced_main_menu())
+            if cmd == "/help":
+                return await show_companion_help(chat)
+            if cmd == "/authors":
+                return await show_user_authors(chat,uid)
             if cmd == "/webkey":
                 tm=legacy.team(uid)
                 if not tm:
@@ -2328,7 +2395,8 @@ async def connection_startup():
     try:
         if legacy.TOKEN:
             await legacy.tg("setMyCommands", {"commands": json.dumps([
-                {"command": "menu", "description": "Open Author Scout menu"},
+                {"command": "menu", "description": "Open the Author Scout companion menu"},
+                {"command": "webapp", "description": "Open the full Author Scout web app"},
                 {"command": "find", "description": "Scout authors using filters or natural language"},
                 {"command": "indexstatus", "description": "Show source index and author reservoir"},
                 {"command": "scoutstatus", "description": "Show your active Scout progress and time remaining"},
@@ -2347,7 +2415,7 @@ async def connection_startup():
                 {"command": "autosend", "description": "Automatic sending status"},
                 {"command": "team", "description": "Show team and invite code"},
                 {"command": "howto", "description": "Complete Author Scout workflow guide"},
-                {"command": "help", "description": "Show help"},
+                {"command": "help", "description": "Show companion help"},
             ])})
     except Exception as e:
         print(f"CONNECTION_COMMAND_SETUP_ERROR {type(e).__name__}: {e}")
