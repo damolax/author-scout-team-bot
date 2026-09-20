@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import csv
-import hashlib
 import io
 import json
 import os
@@ -11,7 +9,7 @@ import re
 import time
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse, urlencode
+from urllib.parse import urlparse, urlunparse
 
 import bot_main as legacy
 from sqlalchemy import text
@@ -72,10 +70,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_RESEARCH_MODEL = os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-terra").strip() or "gpt-5.6-terra"
 AI_RESEARCH_CONCURRENCY = max(1, min(4, int(os.getenv("AI_RESEARCH_CONCURRENCY", "2"))))
 AI_RESEARCH_POLL_SECONDS = max(3, int(os.getenv("AI_RESEARCH_POLL_SECONDS", "5")))
-PLUGIN_PUBLIC_BASE = (os.getenv("PUBLIC_BASE_URL") or "https://author-scout-team-bot.onrender.com").rstrip("/")
-PLUGIN_ACCESS_TOKEN_SECONDS = max(3600, int(os.getenv("PLUGIN_ACCESS_TOKEN_SECONDS", str(30*24*3600))))
-PLUGIN_REFRESH_TOKEN_SECONDS = max(86400, int(os.getenv("PLUGIN_REFRESH_TOKEN_SECONDS", str(180*24*3600))))
-PLUGIN_LINK_CODE_SECONDS = max(300, int(os.getenv("PLUGIN_LINK_CODE_SECONDS", "900")))
 
 
 # AUTHOR_SCOUT_WEB_CORS
@@ -405,42 +399,6 @@ def init_connection_db() -> None:
             completed_at TEXT DEFAULT '',
             updated_at TEXT NOT NULL
         )""",
-        f"""CREATE TABLE IF NOT EXISTS plugin_link_codes(
-            id {pk},
-            code_hash TEXT NOT NULL UNIQUE,
-            user_id BIGINT NOT NULL,
-            team_id INTEGER NOT NULL,
-            expires_at TEXT NOT NULL,
-            used_at TEXT DEFAULT '',
-            created_at TEXT NOT NULL
-        )""",
-        f"""CREATE TABLE IF NOT EXISTS plugin_oauth_codes(
-            id {pk},
-            code TEXT NOT NULL UNIQUE,
-            user_id BIGINT NOT NULL,
-            team_id INTEGER NOT NULL,
-            client_id TEXT NOT NULL,
-            redirect_uri TEXT NOT NULL,
-            code_challenge TEXT NOT NULL,
-            scope TEXT DEFAULT 'author.read author.write',
-            expires_at TEXT NOT NULL,
-            used_at TEXT DEFAULT '',
-            created_at TEXT NOT NULL
-        )""",
-        f"""CREATE TABLE IF NOT EXISTS plugin_research_results(
-            id {pk},
-            user_id BIGINT NOT NULL,
-            prospect_id INTEGER NOT NULL,
-            research_json TEXT DEFAULT '{{}}',
-            status TEXT NOT NULL DEFAULT 'completed',
-            message_id INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(user_id,prospect_id)
-        )""",
-        "CREATE INDEX IF NOT EXISTS idx_plugin_link_code_exp ON plugin_link_codes(expires_at)",
-        "CREATE INDEX IF NOT EXISTS idx_plugin_oauth_code_exp ON plugin_oauth_codes(expires_at)",
-        "CREATE INDEX IF NOT EXISTS idx_plugin_research_user ON plugin_research_results(user_id,status)",
         "CREATE INDEX IF NOT EXISTS idx_ai_research_user_status ON ai_research_jobs(user_id,status)",
         "CREATE INDEX IF NOT EXISTS idx_web_jobs_team_status ON web_research_jobs(team_id,status)",
         "CREATE INDEX IF NOT EXISTS idx_web_job_results_job ON web_research_job_results(job_id,position)",
@@ -1367,484 +1325,6 @@ legacy.claim = claim_with_reservoir
 
 
 # ---------------------------------------------------------------------------
-# Author Scout public ChatGPT plugin / MCP bridge
-# Compatible with public plugin distribution; no OpenAI API key is required.
-# ---------------------------------------------------------------------------
-
-def _plugin_hash(value: str) -> str:
-    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
-
-def _plugin_b64url_sha256(value: str) -> str:
-    digest=hashlib.sha256((value or "").encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
-def _plugin_redirect_ok(uri: str) -> bool:
-    try:
-        p=urlparse(uri)
-        host=(p.hostname or "").lower()
-        if p.scheme!="https":
-            return False
-        return host=="chatgpt.com" or host.endswith(".chatgpt.com") or host=="openai.com" or host.endswith(".openai.com")
-    except Exception:
-        return False
-
-def _plugin_access_payload(request) -> dict | None:
-    auth=(request.headers.get("authorization") or "").strip()
-    if not auth.lower().startswith("bearer "):
-        return None
-    token=auth.split(" ",1)[1].strip()
-    try:
-        payload=legacy.serializer.loads(token,max_age=PLUGIN_ACCESS_TOKEN_SECONDS)
-    except Exception:
-        return None
-    if not isinstance(payload,dict) or payload.get("scope")!="plugin_access":
-        return None
-    return payload
-
-def _plugin_auth_error(req_id):
-    meta_url=f"{PLUGIN_PUBLIC_BASE}/.well-known/oauth-protected-resource"
-    challenge=f'Bearer resource_metadata="{meta_url}", error="insufficient_scope", error_description="Connect your Author Scout account to continue"'
-    return {
-        "jsonrpc":"2.0","id":req_id,
-        "result":{
-            "content":[{"type":"text","text":"Authentication required. Connect your Author Scout account."}],
-            "_meta":{"mcp/www_authenticate":[challenge]},
-            "isError":True
-        }
-    }
-
-def _plugin_seed_row(p: dict) -> dict:
-    return {
-        "author_id":f"AS-{p['id']}",
-        "name":p.get("name") or "",
-        "country":p.get("country") or "",
-        "genre":p.get("genre") or "",
-        "website":p.get("website") or "",
-        "public_professional_email":p.get("email") or "",
-        "email_source_url":p.get("email_source_url") or "",
-        "verification_status":p.get("verification_status") or "",
-        "discovery_platform":p.get("discovery_platform") or "",
-        "discovery_source_type":p.get("discovery_source_type") or "",
-        "discovery_source_url":p.get("discovery_source_url") or "",
-        "discovery_query":p.get("discovery_query") or "",
-        "discovery_evidence":p.get("discovery_evidence") or "",
-        "discovery_confidence":int(p.get("discovery_confidence") or 0),
-        "claimed_at":p.get("claimed_at") or "",
-    }
-
-def _plugin_tools():
-    read_sec=[{"type":"oauth2","scopes":["author.read"]}]
-    write_sec=[{"type":"oauth2","scopes":["author.write"]}]
-    def secured(tool, schemes):
-        tool["securitySchemes"]=schemes
-        meta=dict(tool.get("_meta") or {})
-        meta["securitySchemes"]=schemes
-        tool["_meta"]=meta
-        return tool
-    return [
-        secured({
-            "name":"get_profile",
-            "title":"Get Author Scout profile",
-            "description":"Return the connected Author Scout user profile and author counts. Use this to verify which Author Scout account is connected.",
-            "inputSchema":{"type":"object","properties":{},"additionalProperties":False},
-            "outputSchema":{"type":"object","properties":{
-                "user_id":{"type":"integer"},"name":{"type":"string"},"username":{"type":"string"},
-                "author_count":{"type":"integer"},"unresearched_count":{"type":"integer"}
-            },"required":["user_id","name","username","author_count","unresearched_count"],"additionalProperties":False},
-            "annotations":{"readOnlyHint":True},
-            "_meta":{"openai/profile":True}
-        },read_sec),
-        secured({
-            "name":"get_unresearched_authors",
-            "title":"Get unresearched authors",
-            "description":"Fetch the connected user's next unresearched Author Scout authors with Research Seeds and discovery evidence. Use this before performing deep author research.",
-            "inputSchema":{"type":"object","properties":{
-                "limit":{"type":"integer","minimum":1,"maximum":50,"default":25}
-            },"additionalProperties":False},
-            "outputSchema":{"type":"object","properties":{
-                "authors":{"type":"array","items":{"type":"object"}},
-                "count":{"type":"integer"}
-            },"required":["authors","count"],"additionalProperties":False},
-            "annotations":{"readOnlyHint":True}
-        },read_sec),
-        secured({
-            "name":"get_my_authors",
-            "title":"Get my authors",
-            "description":"Fetch Author Scout authors belonging exclusively to the connected user. Can filter by a name, country, genre, source platform, or other saved text.",
-            "inputSchema":{"type":"object","properties":{
-                "limit":{"type":"integer","minimum":1,"maximum":50,"default":25},
-                "search":{"type":"string","default":""}
-            },"additionalProperties":False},
-            "outputSchema":{"type":"object","properties":{
-                "authors":{"type":"array","items":{"type":"object"}},
-                "count":{"type":"integer"}
-            },"required":["authors","count"],"additionalProperties":False},
-            "annotations":{"readOnlyHint":True}
-        },read_sec),
-        secured({
-            "name":"get_author",
-            "title":"Get one author",
-            "description":"Fetch one Author Scout author and their complete Research Seed by Author Scout ID such as AS-123.",
-            "inputSchema":{"type":"object","properties":{"author_id":{"type":"string"}},"required":["author_id"],"additionalProperties":False},
-            "outputSchema":{"type":"object","properties":{"author":{"type":"object"}},"required":["author"],"additionalProperties":False},
-            "annotations":{"readOnlyHint":True}
-        },read_sec),
-        secured({
-            "name":"save_author_research",
-            "title":"Save author research and first message",
-            "description":"Save verified deep research and the first outreach message back into Author Scout for an author owned by the connected user. This does not send email.",
-            "inputSchema":{"type":"object","properties":{
-                "author_id":{"type":"string"},
-                "author_name_verified":{"type":"string","default":""},
-                "country_verified":{"type":"string","default":""},
-                "primary_language":{"type":"string","default":""},
-                "genre":{"type":"string","default":""},
-                "official_website":{"type":"string","default":""},
-                "public_professional_email":{"type":"string","default":""},
-                "email_source_url":{"type":"string","default":""},
-                "identity_confidence":{"type":"integer","minimum":0,"maximum":100,"default":0},
-                "current_project":{"type":"string","default":""},
-                "current_project_stage":{"type":"string","default":""},
-                "recent_activity_current_moment":{"type":"string","default":""},
-                "why_now":{"type":"string","default":""},
-                "research_summary":{"type":"string","default":""},
-                "opportunities":{"type":"array","items":{"type":"string"},"default":[]},
-                "sources":{"type":"array","items":{"type":"string"},"default":[]},
-                "selected_subject":{"type":"string","default":""},
-                "message_author_language":{"type":"string","default":""},
-                "message_english":{"type":"string","default":""}
-            },"required":["author_id","selected_subject","message_author_language","message_english"],"additionalProperties":False},
-            "outputSchema":{"type":"object","properties":{
-                "saved":{"type":"boolean"},"author_id":{"type":"string"},"message_id":{"type":"integer"}
-            },"required":["saved","author_id","message_id"],"additionalProperties":False},
-            "annotations":{"readOnlyHint":False,"destructiveHint":False,"idempotentHint":True}
-        },write_sec),
-        secured({
-            "name":"get_message_queue",
-            "title":"Get ready messages",
-            "description":"Fetch first messages already saved in Author Scout for the connected user. This is read-only and does not send anything.",
-            "inputSchema":{"type":"object","properties":{
-                "limit":{"type":"integer","minimum":1,"maximum":50,"default":25}
-            },"additionalProperties":False},
-            "outputSchema":{"type":"object","properties":{
-                "messages":{"type":"array","items":{"type":"object"}},
-                "count":{"type":"integer"}
-            },"required":["messages","count"],"additionalProperties":False},
-            "annotations":{"readOnlyHint":True}
-        },read_sec)
-    ]
-
-def _plugin_tool_result(data: dict, text_value: str):
-    return {
-        "content":[{"type":"text","text":text_value}],
-        "structuredContent":data
-    }
-
-def _plugin_parse_author_id(value: str) -> int:
-    m=re.fullmatch(r"(?:AS-)?(\d+)",(value or "").strip(),re.I)
-    if not m:
-        raise ValueError("Invalid Author Scout ID")
-    return int(m.group(1))
-
-async def _plugin_call_tool(uid: int, name: str, args: dict):
-    if name=="get_profile":
-        user=legacy.row("SELECT * FROM users WHERE telegram_user_id=:u",u=uid) or {}
-        total=int((legacy.row("SELECT COUNT(*) c FROM prospects WHERE claimed_by_user_id=:u",u=uid) or {"c":0})["c"])
-        pending=int((legacy.row("""SELECT COUNT(*) c FROM prospects p
-            WHERE p.claimed_by_user_id=:u AND NOT EXISTS(
-                SELECT 1 FROM plugin_research_results r
-                WHERE r.user_id=:u AND r.prospect_id=p.id AND r.status='completed')""",u=uid) or {"c":0})["c"])
-        data={"user_id":uid,"name":user.get("first_name") or "Author Scout user","username":user.get("username") or "",
-              "author_count":total,"unresearched_count":pending}
-        return _plugin_tool_result(data,f"Connected to Author Scout. {total} authors, {pending} unresearched.")
-
-    if name=="get_unresearched_authors":
-        limit=max(1,min(50,int(args.get("limit") or 25)))
-        rs=legacy.rows("""SELECT p.* FROM prospects p
-            WHERE p.claimed_by_user_id=:u
-            AND NOT EXISTS(SELECT 1 FROM plugin_research_results r
-                WHERE r.user_id=:u AND r.prospect_id=p.id AND r.status='completed')
-            ORDER BY p.id ASC LIMIT :n""",u=uid,n=limit)
-        authors=[_plugin_seed_row(p) for p in rs]
-        return _plugin_tool_result({"authors":authors,"count":len(authors)},f"Fetched {len(authors)} unresearched Author Scout authors.")
-
-    if name=="get_my_authors":
-        limit=max(1,min(50,int(args.get("limit") or 25)))
-        q=(args.get("search") or "").strip().lower()
-        if q:
-            term="%"+q+"%"
-            rs=legacy.rows("""SELECT * FROM prospects WHERE claimed_by_user_id=:u AND
-                (lower(name) LIKE :q OR lower(country) LIKE :q OR lower(genre) LIKE :q
-                 OR lower(discovery_platform) LIKE :q OR lower(discovery_source_type) LIKE :q)
-                ORDER BY id DESC LIMIT :n""",u=uid,q=term,n=limit)
-        else:
-            rs=legacy.rows("SELECT * FROM prospects WHERE claimed_by_user_id=:u ORDER BY id DESC LIMIT :n",u=uid,n=limit)
-        authors=[_plugin_seed_row(p) for p in rs]
-        return _plugin_tool_result({"authors":authors,"count":len(authors)},f"Fetched {len(authors)} Author Scout authors.")
-
-    if name=="get_author":
-        pid=_plugin_parse_author_id(args.get("author_id") or "")
-        p=legacy.row("SELECT * FROM prospects WHERE id=:p AND claimed_by_user_id=:u",p=pid,u=uid)
-        if not p:
-            raise ValueError("Author not found in this Author Scout account")
-        return _plugin_tool_result({"author":_plugin_seed_row(p)},f"Fetched Research Seed for {p['name']}.")
-
-    if name=="save_author_research":
-        pid=_plugin_parse_author_id(args.get("author_id") or "")
-        p=legacy.row("SELECT * FROM prospects WHERE id=:p AND claimed_by_user_id=:u",p=pid,u=uid)
-        if not p:
-            raise ValueError("Author not found in this Author Scout account")
-        user=legacy.row("SELECT team_id FROM users WHERE telegram_user_id=:u",u=uid) or {}
-        tid=int(user.get("team_id") or p.get("claimed_team_id") or 0)
-        result={
-            "author_name_verified":args.get("author_name_verified") or "",
-            "country_verified":args.get("country_verified") or "",
-            "primary_language":args.get("primary_language") or "",
-            "genre":args.get("genre") or "",
-            "official_website":args.get("official_website") or "",
-            "public_professional_email":args.get("public_professional_email") or "",
-            "email_source_url":args.get("email_source_url") or "",
-            "identity_confidence":int(args.get("identity_confidence") or 0),
-            "current_project":args.get("current_project") or "",
-            "current_project_stage":args.get("current_project_stage") or "",
-            "recent_activity_current_moment":args.get("recent_activity_current_moment") or "",
-            "why_now":args.get("why_now") or "",
-            "research_summary":args.get("research_summary") or "",
-            "opportunities":args.get("opportunities") or [],
-            "sources":args.get("sources") or [],
-            "selected_subject":args.get("selected_subject") or "",
-            "message_author_language":args.get("message_author_language") or "",
-            "message_english":args.get("message_english") or "",
-        }
-        mid=_save_ai_result({"prospect_id":pid,"user_id":uid,"team_id":tid},result)
-        now_iso=legacy.iso()
-        legacy.execq("""INSERT INTO plugin_research_results(user_id,prospect_id,research_json,status,message_id,created_at,updated_at)
-            VALUES(:u,:p,:r,'completed',:m,:d,:d)
-            ON CONFLICT(user_id,prospect_id) DO UPDATE SET research_json=:r,status='completed',
-            message_id=:m,updated_at=:d""",u=uid,p=pid,r=json.dumps(result,ensure_ascii=False),m=mid,d=now_iso)
-        data={"saved":True,"author_id":f"AS-{pid}","message_id":mid}
-        return _plugin_tool_result(data,f"Saved research and first message for {p['name']} to Author Scout. Email was not sent.")
-
-    if name=="get_message_queue":
-        limit=max(1,min(50,int(args.get("limit") or 25)))
-        rs=legacy.rows("""SELECT m.id,m.subject,m.body,m.body_english,m.status,
-            COALESCE(NULLIF(m.recipient_email,''),p.email) recipient,
-            p.id prospect_id,p.name author_name
-            FROM messages m JOIN prospects p ON p.id=m.prospect_id
-            WHERE p.claimed_by_user_id=:u AND m.status='ready'
-            ORDER BY m.id DESC LIMIT :n""",u=uid,n=limit)
-        messages=[{
-            "message_id":int(r["id"]),"author_id":f"AS-{r['prospect_id']}",
-            "author_name":r.get("author_name") or "","recipient":r.get("recipient") or "",
-            "subject":r.get("subject") or "","message_author_language":r.get("body") or "",
-            "message_english":r.get("body_english") or "","status":r.get("status") or ""
-        } for r in rs]
-        return _plugin_tool_result({"messages":messages,"count":len(messages)},f"Fetched {len(messages)} ready Author Scout messages.")
-
-    raise ValueError("Unknown Author Scout tool")
-
-@app.post("/api/v1/plugin/link-code")
-async def web_plugin_link_code(request: legacy.Request):
-    ctx=_web_auth(request);team=_auth_team(ctx)
-    uid=int(ctx.get("uid") or 0);tid=int(team["id"])
-    raw="AS-"+legacy.secrets.token_hex(4).upper()
-    h=_plugin_hash(raw)
-    t=legacy.iso();exp=legacy.iso(legacy.now()+timedelta(seconds=PLUGIN_LINK_CODE_SECONDS))
-    legacy.execq("DELETE FROM plugin_link_codes WHERE user_id=:u OR expires_at<:d",u=uid,d=t)
-    legacy.execq("""INSERT INTO plugin_link_codes(code_hash,user_id,team_id,expires_at,used_at,created_at)
-        VALUES(:h,:u,:t,:e,'',:d)""",h=h,u=uid,t=tid,e=exp,d=t)
-    return {"ok":True,"code":raw,"expires_at":exp,"expires_in":PLUGIN_LINK_CODE_SECONDS}
-
-@app.get("/api/v1/plugin/status")
-async def web_plugin_status(request: legacy.Request):
-    ctx=_web_auth(request);_auth_team(ctx);uid=int(ctx.get("uid") or 0)
-    research=int((legacy.row("SELECT COUNT(*) c FROM plugin_research_results WHERE user_id=:u AND status='completed'",u=uid) or {"c":0})["c"])
-    return {
-        "ok":True,
-        "public_plugin_ready":True,
-        "mcp_url":f"{PLUGIN_PUBLIC_BASE}/mcp",
-        "research_saved":research,
-        "api_billing_required":False,
-        "note":"Public directory publication is still required before Plus/Free users can install Author Scout directly from ChatGPT."
-    }
-
-@app.get("/.well-known/oauth-protected-resource")
-async def plugin_oauth_resource_metadata():
-    return {
-        "resource":f"{PLUGIN_PUBLIC_BASE}/mcp",
-        "authorization_servers":[PLUGIN_PUBLIC_BASE],
-        "bearer_methods_supported":["header"],
-        "scopes_supported":["author.read","author.write"],
-        "resource_documentation":f"{PLUGIN_PUBLIC_BASE}/plugin/privacy"
-    }
-
-@app.get("/.well-known/oauth-protected-resource/mcp")
-async def plugin_oauth_resource_metadata_mcp():
-    return await plugin_oauth_resource_metadata()
-
-
-@app.get("/.well-known/oauth-authorization-server")
-async def plugin_oauth_server_metadata():
-    return {
-        "issuer":PLUGIN_PUBLIC_BASE,
-        "authorization_endpoint":f"{PLUGIN_PUBLIC_BASE}/oauth/authorize",
-        "token_endpoint":f"{PLUGIN_PUBLIC_BASE}/oauth/token",
-        "response_types_supported":["code"],
-        "grant_types_supported":["authorization_code","refresh_token"],
-        "code_challenge_methods_supported":["S256"],
-        "token_endpoint_auth_methods_supported":["none"],
-        "scopes_supported":["author.read","author.write"]
-    }
-
-@app.get("/oauth/authorize")
-async def plugin_oauth_authorize_page(request: legacy.Request):
-    q=request.query_params
-    redirect_uri=(q.get("redirect_uri") or "").strip()
-    client_id=(q.get("client_id") or "").strip()
-    state=(q.get("state") or "").strip()
-    challenge=(q.get("code_challenge") or "").strip()
-    method=(q.get("code_challenge_method") or "").strip()
-    scope=(q.get("scope") or "author.read author.write").strip()
-    if (q.get("response_type") or "")!="code" or not client_id or not redirect_uri or not challenge or method!="S256" or not _plugin_redirect_ok(redirect_uri):
-        return legacy.HTMLResponse("<h1>Invalid Author Scout connection request</h1><p>Please return to ChatGPT and try connecting Author Scout again.</p>",status_code=400)
-    hidden="".join(
-        f'<input type="hidden" name="{legacy.esc(k)}" value="{legacy.esc(v)}">'
-        for k,v in {
-            "redirect_uri":redirect_uri,"client_id":client_id,"state":state,
-            "code_challenge":challenge,"scope":scope
-        }.items()
-    )
-    page=f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Connect Author Scout</title>
-    <style>body{{font-family:Inter,system-ui,sans-serif;background:#ecebe6;color:#24231f;margin:0;padding:32px}}
-    .card{{max-width:520px;margin:7vh auto;background:#fffdf5;border:1px solid #dfddd3;border-radius:24px;padding:28px;box-shadow:0 20px 60px #00000012}}
-    h1{{margin:0 0 8px;font-size:28px}}p{{color:#6f6d65;line-height:1.55}}input{{width:100%;box-sizing:border-box;padding:13px 14px;border:1px solid #d7d3c6;border-radius:12px;font-size:16px}}
-    button{{margin-top:12px;width:100%;padding:13px 16px;border:0;border-radius:999px;background:#23221f;color:white;font-weight:700}}
-    small{{display:block;margin-top:14px;color:#8d8a81;line-height:1.5}}</style></head><body><div class="card">
-    <h1>Connect Author Scout</h1>
-    <p>In Author Scout Web, open <b>System → ChatGPT Connection</b>, generate a one-time connection code, and paste it below.</p>
-    <form method="post" action="/oauth/authorize">{hidden}
-    <input name="connection_code" autocomplete="one-time-code" placeholder="AS-XXXXXXXX" required>
-    <button type="submit">Connect to ChatGPT</button></form>
-    <small>This links ChatGPT only to your Author Scout account. It does not share your ChatGPT conversations or billing information with Author Scout.</small>
-    </div></body></html>"""
-    return legacy.HTMLResponse(page)
-
-@app.post("/oauth/authorize")
-async def plugin_oauth_authorize_submit(request: legacy.Request):
-    form=await request.form()
-    redirect_uri=str(form.get("redirect_uri") or "").strip()
-    client_id=str(form.get("client_id") or "").strip()
-    state=str(form.get("state") or "").strip()
-    challenge=str(form.get("code_challenge") or "").strip()
-    scope=str(form.get("scope") or "author.read author.write").strip()
-    connection_code=str(form.get("connection_code") or "").strip().upper()
-    if not _plugin_redirect_ok(redirect_uri) or not client_id or not challenge:
-        return legacy.HTMLResponse("<h1>Invalid connection request</h1>",status_code=400)
-    t=legacy.iso()
-    link=legacy.row("""SELECT * FROM plugin_link_codes WHERE code_hash=:h AND used_at='' AND expires_at>:d""",
-                    h=_plugin_hash(connection_code),d=t)
-    if not link:
-        return legacy.HTMLResponse("<h1>Connection code expired or invalid</h1><p>Generate a fresh code from Author Scout Web and try again.</p>",status_code=400)
-    code=legacy.secrets.token_urlsafe(32)
-    exp=legacy.iso(legacy.now()+timedelta(minutes=10))
-    legacy.execq("UPDATE plugin_link_codes SET used_at=:d WHERE id=:i",d=t,i=link["id"])
-    legacy.execq("""INSERT INTO plugin_oauth_codes(code,user_id,team_id,client_id,redirect_uri,code_challenge,scope,expires_at,used_at,created_at)
-        VALUES(:c,:u,:t,:cid,:r,:ch,:s,:e,'',:d)""",
-        c=code,u=link["user_id"],t=link["team_id"],cid=client_id,r=redirect_uri,ch=challenge,s=scope,e=exp,d=t)
-    params={"code":code}
-    if state:params["state"]=state
-    sep="&" if "?" in redirect_uri else "?"
-    return legacy.RedirectResponse(redirect_uri+sep+urlencode(params),status_code=302)
-
-@app.post("/oauth/token")
-async def plugin_oauth_token(request: legacy.Request):
-    form=await request.form()
-    grant=str(form.get("grant_type") or "")
-    if grant=="authorization_code":
-        code=str(form.get("code") or "")
-        verifier=str(form.get("code_verifier") or "")
-        redirect_uri=str(form.get("redirect_uri") or "")
-        client_id=str(form.get("client_id") or "")
-        row=legacy.row("""SELECT * FROM plugin_oauth_codes WHERE code=:c AND used_at='' AND expires_at>:d""",c=code,d=legacy.iso())
-        if not row or row["redirect_uri"]!=redirect_uri or row["client_id"]!=client_id or _plugin_b64url_sha256(verifier)!=row["code_challenge"]:
-            return legacy.JSONResponse({"error":"invalid_grant"},status_code=400)
-        legacy.execq("UPDATE plugin_oauth_codes SET used_at=:d WHERE id=:i",d=legacy.iso(),i=row["id"])
-        access=legacy.serializer.dumps({"scope":"plugin_access","uid":int(row["user_id"]),"team_id":int(row["team_id"]),"scopes":row.get("scope") or "author.read author.write"})
-        refresh=legacy.serializer.dumps({"scope":"plugin_refresh","uid":int(row["user_id"]),"team_id":int(row["team_id"]),"scopes":row.get("scope") or "author.read author.write"})
-        return {"access_token":access,"token_type":"Bearer","expires_in":PLUGIN_ACCESS_TOKEN_SECONDS,
-                "refresh_token":refresh,"scope":row.get("scope") or "author.read author.write"}
-    if grant=="refresh_token":
-        token=str(form.get("refresh_token") or "")
-        try:
-            payload=legacy.serializer.loads(token,max_age=PLUGIN_REFRESH_TOKEN_SECONDS)
-        except Exception:
-            return legacy.JSONResponse({"error":"invalid_grant"},status_code=400)
-        if not isinstance(payload,dict) or payload.get("scope")!="plugin_refresh":
-            return legacy.JSONResponse({"error":"invalid_grant"},status_code=400)
-        access=legacy.serializer.dumps({"scope":"plugin_access","uid":int(payload["uid"]),"team_id":int(payload.get("team_id") or 0),"scopes":payload.get("scopes") or "author.read author.write"})
-        return {"access_token":access,"token_type":"Bearer","expires_in":PLUGIN_ACCESS_TOKEN_SECONDS,
-                "refresh_token":token,"scope":payload.get("scopes") or "author.read author.write"}
-    return legacy.JSONResponse({"error":"unsupported_grant_type"},status_code=400)
-
-@app.get("/plugin/privacy")
-async def plugin_privacy():
-    return legacy.HTMLResponse("""<html><body style="font-family:system-ui;max-width:760px;margin:50px auto;padding:20px">
-    <h1>Author Scout Privacy</h1><p>Author Scout connects ChatGPT to the Author Scout account explicitly authorized by the user.</p>
-    <p>The plugin may read the user's claimed authors, discovery sources, Research Seeds and saved outreach messages. When the user asks ChatGPT to save research, the plugin may write that research and draft message back to Author Scout.</p>
-    <p>Author Scout does not receive the user's ChatGPT password, ChatGPT subscription billing data, unrelated ChatGPT conversations or ChatGPT memory through this connection.</p>
-    <p>Users can stop future plugin access by disconnecting Author Scout in ChatGPT. Author Scout account data remains subject to the controls available in Author Scout.</p>
-    </body></html>""")
-
-@app.get("/plugin/terms")
-async def plugin_terms():
-    return legacy.HTMLResponse("""<html><body style="font-family:system-ui;max-width:760px;margin:50px auto;padding:20px">
-    <h1>Author Scout Terms</h1><p>Author Scout provides author discovery, research handoff and outreach-drafting tools. Users are responsible for reviewing research and messages before contacting authors.</p>
-    <p>The ChatGPT plugin does not automatically send email. Outbound email remains a separate Author Scout/Gmail action.</p>
-    <p>Plugin availability and model capabilities depend on the user's ChatGPT plan, region and OpenAI product availability.</p>
-    </body></html>""")
-
-@app.post("/mcp")
-async def author_scout_mcp(request: legacy.Request):
-    try:
-        body=await request.json()
-    except Exception:
-        return legacy.JSONResponse({"jsonrpc":"2.0","id":None,"error":{"code":-32700,"message":"Parse error"}},status_code=400)
-    req_id=body.get("id")
-    method=body.get("method") or ""
-    params=body.get("params") or {}
-
-    if method=="initialize":
-        version=params.get("protocolVersion") or "2025-06-18"
-        return {
-            "jsonrpc":"2.0","id":req_id,
-            "result":{"protocolVersion":version,"capabilities":{"tools":{"listChanged":False}},
-                      "serverInfo":{"name":"author-scout","version":"0.1.0"}}
-        }
-    if method=="notifications/initialized":
-        return Response(status_code=202)
-    if method=="ping":
-        return {"jsonrpc":"2.0","id":req_id,"result":{}}
-    if method=="tools/list":
-        return {"jsonrpc":"2.0","id":req_id,"result":{"tools":_plugin_tools()}}
-
-    if method=="tools/call":
-        payload=_plugin_access_payload(request)
-        if not payload:
-            return _plugin_auth_error(req_id)
-        uid=int(payload.get("uid") or 0)
-        name=params.get("name") or ""
-        args=params.get("arguments") or {}
-        try:
-            result=await _plugin_call_tool(uid,name,args)
-            return {"jsonrpc":"2.0","id":req_id,"result":result}
-        except Exception as e:
-            return {"jsonrpc":"2.0","id":req_id,
-                    "result":{"content":[{"type":"text","text":str(e)}],"isError":True}}
-    return {"jsonrpc":"2.0","id":req_id,"error":{"code":-32601,"message":"Method not found"}}
-
-
-# ---------------------------------------------------------------------------
 # OpenAI deep research + messaging bridge
 # ---------------------------------------------------------------------------
 
@@ -2467,17 +1947,22 @@ async def web_authors_export_xlsx(request: legacy.Request):
         if any(x in h.lower() for x in ["evidence","query"]): ws.column_dimensions[letter].width=42
         if any(x in h.lower() for x in ["url","website"]): ws.column_dimensions[letter].width=34
         if "name" in h.lower(): ws.column_dimensions[letter].width=24
-    info=wb.create_sheet("Research Handoff")
-    info.append(["AUTHOR SCOUT RESEARCH HANDOFF"])
-    info.append(["Purpose","Use each row as a Research Seed for the deep research + messaging stage."])
-    info.append(["Ownership","These authors are exclusively claimed to the current Author Scout user."])
-    info.append(["Important","Discovery evidence is a starting point, not final proof. Deep research must independently verify important facts."])
-    info.append(["AI flow","When AI deep research is connected, Author Scout can process these records directly without downloading this file."])
-    info.column_dimensions["A"].width=20
-    info.column_dimensions["B"].width=105
+    info=wb.create_sheet("ChatGPT Instructions")
+    info.append(["AUTHOR SCOUT → CHATGPT RESEARCH PACK"])
+    info.append(["How to use","Upload this Excel file into ChatGPT and ask ChatGPT to research the authors in the My Authors sheet."])
+    info.append(["Research rule","Treat Discovery Evidence and Discovery Source URL as the starting point only. Independently verify important facts with current public sources."])
+    info.append(["Do not invent","Do not invent an email, website, book, project, representation status, rights status, publication date, or recent activity."])
+    info.append(["Research depth","For each author, verify identity, current career moment, recent activity, catalogue/books, current project where public, publishing context, audience/platform signals, realistic outreach opportunities, and already-solved needs."])
+    info.append(["Message rule","Create the first outreach message in the author's appropriate language first, followed by a complete English version. Keep the subject line separate."])
+    info.append(["Personalization","The first 2–3 sentences must demonstrate specific verified research. Do not claim to have read a work unless evidence supports that statement."])
+    info.append(["Tone","Human, professional, useful and non-pushy. Avoid em dashes and double-dash punctuation."])
+    info.append(["Output","Return a table or workbook-ready structure containing Author Scout ID, verified research summary, verified sources, public professional email if found, email source URL, subject, author-language message, English message, and research status."])
+    info.append(["Suggested prompt","Research every author in this Author Scout workbook using the ChatGPT Instructions sheet. Work from each Research Seed, verify current information on the web, create the first message in the author's language and English, and clearly mark authors with insufficient evidence or no valid public contact."])
+    info.column_dimensions["A"].width=22
+    info.column_dimensions["B"].width=120
     buf=io.BytesIO()
     wb.save(buf)
-    filename=f"author-scout-my-authors-{legacy.now().strftime('%Y-%m-%d')}.xlsx"
+    filename=f"Author_Scout_ChatGPT_Research_Pack_{legacy.now().strftime('%Y-%m-%d')}.xlsx"
     return Response(content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition":f'attachment; filename="{filename}"'})
