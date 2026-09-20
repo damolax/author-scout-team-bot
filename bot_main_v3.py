@@ -1598,12 +1598,12 @@ async def web_authors(request: legacy.Request, limit: int=100, search: str=""):
 def _web_actor_uid(ctx: dict, team: dict) -> int:
     return int(ctx.get("uid") or team.get("owner_user_id") or 0)
 
-def _web_message(message_id: int, team_id: int):
+def _web_message(message_id: int, user_id: int):
     return legacy.row("""SELECT m.*,p.name AS author_name,p.email AS author_email,
         p.country AS author_country,p.genre AS author_genre,p.website AS author_website,
         COALESCE(NULLIF(m.recipient_email,''),p.email) AS recipient
         FROM messages m JOIN prospects p ON p.id=m.prospect_id
-        WHERE m.id=:i AND m.team_id=:t""",i=message_id,t=team_id)
+        WHERE m.id=:i AND p.claimed_by_user_id=:u""",i=message_id,u=user_id)
 
 @app.get("/api/v1/messages")
 async def web_messages(request: legacy.Request, status: str="ready", limit: int=100, search: str=""):
@@ -1620,7 +1620,7 @@ async def web_messages(request: legacy.Request, status: str="ready", limit: int=
     else:
         condition="m.status='ready'"
         status="ready"
-    params={"t":tid,"n":limit}
+    params={"u":uid,"n":limit}
     search_sql=""
     if search.strip():
         params["q"]="%"+search.strip().lower()+"%"
@@ -1633,7 +1633,7 @@ async def web_messages(request: legacy.Request, status: str="ready", limit: int=
         p.genre AS author_genre,p.website AS author_website,
         COALESCE(NULLIF(m.recipient_email,''),p.email) AS recipient
         FROM messages m JOIN prospects p ON p.id=m.prospect_id
-        WHERE m.team_id=:t AND {condition}{search_sql}
+        WHERE p.claimed_by_user_id=:u AND {condition}{search_sql}
         ORDER BY CASE WHEN m.status='ready' THEN 0 ELSE 1 END,m.id DESC LIMIT :n""",**params)
     accounts=legacy.rows("SELECT id,email FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id",u=uid) if uid else []
     return {"ok":True,"status":status,"messages":rs,
@@ -1643,7 +1643,7 @@ async def web_messages(request: legacy.Request, status: str="ready", limit: int=
 async def web_message_compose_link(request: legacy.Request, message_id: int):
     ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
     uid=_web_actor_uid(ctx,team)
-    m=_web_message(message_id,tid)
+    m=_web_message(message_id,uid)
     if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
     if not (m.get("recipient") or "").strip():
         raise legacy.HTTPException(status_code=400,detail="This message has no recipient email")
@@ -1655,7 +1655,7 @@ async def web_message_compose_link(request: legacy.Request, message_id: int):
 async def web_message_status(request: legacy.Request, message_id: int):
     ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
     uid=_web_actor_uid(ctx,team)
-    m=_web_message(message_id,tid)
+    m=_web_message(message_id,uid)
     if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
     body=await request.json()
     action=str(body.get("status") or "").strip().lower()
@@ -1663,23 +1663,23 @@ async def web_message_status(request: legacy.Request, message_id: int):
     if action=="sent":
         legacy.execq("""UPDATE messages SET status='sent',sent_by_user_id=:u,sent_at=:d,
             updated_at=:d,sent_via=CASE WHEN COALESCE(sent_via,'')='' THEN 'manual_web' ELSE sent_via END
-            WHERE id=:i AND team_id=:t""",u=uid,d=t,i=message_id,t=tid)
+            WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",u=uid,d=t,i=message_id)
     elif action=="replied":
         legacy.execq("""UPDATE messages SET reply_status='replied',replied_at=:d,updated_at=:d
-            WHERE id=:i AND team_id=:t""",d=t,i=message_id,t=tid)
+            WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",d=t,i=message_id,u=uid)
     elif action=="ready":
         legacy.execq("""UPDATE messages SET status='ready',sent_by_user_id=NULL,sent_at='',
             sender_email='',sent_via='',auto_sent=0,updated_at=:d WHERE id=:i AND team_id=:t""",
-            d=t,i=message_id,t=tid)
+            d=t,i=message_id,u=uid)
     else:
         raise legacy.HTTPException(status_code=400,detail="Status must be sent, replied, or ready")
-    return {"ok":True,"message":_web_message(message_id,tid)}
+    return {"ok":True,"message":_web_message(message_id,uid)}
 
 @app.post("/api/v1/messages/{message_id}/send")
 async def web_message_send(request: legacy.Request, message_id: int):
     ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
     uid=_web_actor_uid(ctx,team)
-    m=_web_message(message_id,tid)
+    m=_web_message(message_id,uid)
     if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
     if (m.get("status") or "")=="sent":
         raise legacy.HTTPException(status_code=409,detail="This message is already marked sent")
@@ -1704,9 +1704,9 @@ async def web_message_send(request: legacy.Request, message_id: int):
     t=legacy.iso()
     legacy.execq("""UPDATE messages SET status='sent',sender_email=:e,sent_by_user_id=:u,
         sent_at=:d,updated_at=:d,sent_via='gmail_api_web',auto_sent=1
-        WHERE id=:i AND team_id=:t""",e=sender["email"],u=uid,d=t,i=message_id,t=tid)
+        WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",e=sender["email"],u=uid,d=t,i=message_id)
     return {"ok":True,"sent":True,"recipient":recipient,"sender_email":sender["email"],
-            "message":_web_message(message_id,tid)}
+            "message":_web_message(message_id,uid)}
 
 @app.get("/api/v1/source-status")
 async def web_source_status(request: legacy.Request):
@@ -1721,7 +1721,7 @@ async def web_source_status(request: legacy.Request):
 
 @app.get("/api/v1/connections")
 async def web_connections(request: legacy.Request, status: str="ready", limit: int=100):
-    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0)
     limit=max(1,min(300,int(limit)))
     allowed={"ready","saved","connected","skipped","not_relevant"}
     statuses=["ready","saved"] if status=="ready" else [status] if status in allowed else ["ready","saved"]
@@ -1729,8 +1729,8 @@ async def web_connections(request: legacy.Request, status: str="ready", limit: i
     rs=legacy.rows(f"""SELECT ca.id assignment_id,ca.status,ca.assigned_user_id,ca.assigned_at,
         cp.profile_url,cp.name,cp.headline,cp.company,cp.country,cp.fit_score,cp.fit_reason,cp.fit_evidence
         FROM connection_assignments ca JOIN connection_profiles cp ON cp.id=ca.profile_id
-        WHERE ca.team_id=:t AND ca.status IN ({placeholders})
-        ORDER BY cp.fit_score DESC,ca.id ASC LIMIT :n""",t=tid,n=limit)
+        WHERE ca.assigned_user_id=:u AND ca.status IN ({placeholders})
+        ORDER BY cp.fit_score DESC,ca.id ASC LIMIT :n""",u=uid,n=limit)
     return {"ok":True,"connections":rs}
 
 @app.post("/api/v1/connections/setup")
@@ -1767,7 +1767,7 @@ async def web_connection_status_update(request: legacy.Request, assignment_id: i
     status=mapping.get(action)
     if not status:raise legacy.HTTPException(status_code=400,detail="Invalid connection status")
     a=legacy.row("""SELECT ca.*,cp.id profile_ref FROM connection_assignments ca
-        JOIN connection_profiles cp ON cp.id=ca.profile_id WHERE ca.id=:i AND ca.team_id=:t""",i=assignment_id,t=tid)
+        JOIN connection_profiles cp ON cp.id=ca.profile_id WHERE ca.id=:i AND ca.assigned_user_id=:u""",i=assignment_id,u=int(ctx.get("uid") or 0))
     if not a:raise legacy.HTTPException(status_code=404,detail="Connection not found")
     t=legacy.iso()
     if status=="connected":
