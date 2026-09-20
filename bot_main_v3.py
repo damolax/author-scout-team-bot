@@ -1939,7 +1939,7 @@ def enhanced_main_menu():
 async def show_connection_status(chat: int, uid: int):
     pref = legacy.row("SELECT * FROM connection_preferences WHERE telegram_user_id=:u", u=uid)
     if not pref:
-        return await legacy.send(chat, "🌐 Connection Intelligence is not configured yet.\nUse <code>/connectsetup YOUR_LINKEDIN_PROFILE_URL</code>.", enhanced_main_menu())
+        return await legacy.send(chat, "🌐 Connection Intelligence is not configured yet.\n\nBest option: open Author Scout Web → Connections and add your LinkedIn profile there. You can also paste the LinkedIn URL directly into this chat.", enhanced_main_menu())
     stats = legacy.rows("SELECT status,COUNT(*) c FROM connection_assignments WHERE assigned_user_id=:u GROUP BY status", u=uid)
     d = {r["status"]: int(r["c"]) for r in stats}
     countries = ", ".join(json.loads(pref.get("target_countries") or "[]"))
@@ -1961,7 +1961,7 @@ async def show_connection_status(chat: int, uid: int):
 async def show_connections(chat: int, uid: int, limit: int = CONN_DISPLAY_COUNT):
     pref = legacy.row("SELECT * FROM connection_preferences WHERE telegram_user_id=:u AND enabled=1", u=uid)
     if not pref:
-        return await legacy.send(chat, "Set up your LinkedIn profile first:\n<code>/connectsetup https://www.linkedin.com/in/your-profile</code>")
+        return await legacy.send(chat, "Your LinkedIn profile is not saved yet.\n\nBest option: open Author Scout Web → Connections and add it there.\n\nYou can also paste your LinkedIn profile URL directly into this chat.")
     rs = legacy.rows("""SELECT ca.id assignment_id,ca.status,cp.* FROM connection_assignments ca
         JOIN connection_profiles cp ON cp.id=ca.profile_id
         WHERE ca.assigned_user_id=:u AND ca.status IN ('ready','saved')
@@ -2119,12 +2119,20 @@ async def enhanced_handle(update: dict):
         return
     m = update.get("message") or {}
     txt = (m.get("text") or "").strip()
+    u = m.get("from") or {}
+    chat = (m.get("chat") or {}).get("id")
+
+    # Natural setup: pasting a LinkedIn profile URL is enough.
+    if txt and not txt.startswith("/") and "linkedin.com/in/" in txt.lower() and chat and u.get("id"):
+        uid = legacy.ensure_user(u)
+        profile = _canon_linkedin(txt)
+        if profile:
+            return await setup_connections(chat, uid, profile)
+
     if txt.startswith("/"):
         parts = txt.split(maxsplit=1)
         cmd = parts[0].split("@")[0].lower()
         arg = parts[1] if len(parts) > 1 else ""
-        u = m.get("from") or {}
-        chat = (m.get("chat") or {}).get("id")
         if chat and u.get("id"):
             uid = legacy.ensure_user(u)
             if cmd == "/webkey":
