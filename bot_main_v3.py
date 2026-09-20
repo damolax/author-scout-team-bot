@@ -66,6 +66,10 @@ SCOUT_TARGET_PER_HOUR = max(30, min(600, int(os.getenv("SCOUT_TARGET_PER_HOUR", 
 SCOUT_MAX_MINUTES = max(1, min(10080, int(os.getenv("SCOUT_MAX_MINUTES", "10080"))))
 WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
 AUTHOR_SCOUT_WEB_URL = os.getenv("AUTHOR_SCOUT_WEB_URL", "https://author-scout-team-bot.vercel.app").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_RESEARCH_MODEL = os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-terra").strip() or "gpt-5.6-terra"
+AI_RESEARCH_CONCURRENCY = max(1, min(4, int(os.getenv("AI_RESEARCH_CONCURRENCY", "2"))))
+AI_RESEARCH_POLL_SECONDS = max(3, int(os.getenv("AI_RESEARCH_POLL_SECONDS", "5")))
 
 
 # AUTHOR_SCOUT_WEB_CORS
@@ -381,6 +385,21 @@ def init_connection_db() -> None:
             created_at TEXT NOT NULL,
             UNIQUE(job_id,prospect_id)
         )""",
+        f"""CREATE TABLE IF NOT EXISTS ai_research_jobs(
+            id {pk},
+            user_id BIGINT NOT NULL,
+            team_id INTEGER NOT NULL,
+            prospect_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            model TEXT DEFAULT '',
+            result_json TEXT DEFAULT '{}',
+            error TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            started_at TEXT DEFAULT '',
+            completed_at TEXT DEFAULT '',
+            updated_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_ai_research_user_status ON ai_research_jobs(user_id,status)",
         "CREATE INDEX IF NOT EXISTS idx_web_jobs_team_status ON web_research_jobs(team_id,status)",
         "CREATE INDEX IF NOT EXISTS idx_web_job_results_job ON web_research_job_results(job_id,position)",
     ]
@@ -1306,6 +1325,207 @@ legacy.claim = claim_with_reservoir
 
 
 # ---------------------------------------------------------------------------
+# OpenAI deep research + messaging bridge
+# ---------------------------------------------------------------------------
+
+def _ai_output_text(payload: dict) -> str:
+    parts=[]
+    for item in payload.get("output") or []:
+        if item.get("type")!="message":
+            continue
+        for content in item.get("content") or []:
+            if content.get("type")=="output_text" and content.get("text"):
+                parts.append(content["text"])
+    return "\n".join(parts).strip()
+
+def _author_research_seed(p: dict) -> dict:
+    return {
+        "canonical_author_id":f"AS-{p['id']}",
+        "name":p.get("name") or "",
+        "country_market":p.get("country") or "",
+        "genre_category":p.get("genre") or "",
+        "discovery_platform":p.get("discovery_platform") or "",
+        "discovery_source_type":p.get("discovery_source_type") or "",
+        "discovery_source_url":p.get("discovery_source_url") or "",
+        "discovery_query":p.get("discovery_query") or "",
+        "discovery_evidence":p.get("discovery_evidence") or "",
+        "identity_confidence":int(p.get("discovery_confidence") or 0),
+        "existing_website":p.get("website") or "",
+        "existing_email":p.get("email") or "",
+    }
+
+_AI_RESULT_SCHEMA={
+    "type":"object",
+    "additionalProperties":False,
+    "properties":{
+        "author_name_verified":{"type":"string"},
+        "country_verified":{"type":"string"},
+        "primary_language":{"type":"string"},
+        "genre":{"type":"string"},
+        "official_website":{"type":"string"},
+        "public_professional_email":{"type":"string"},
+        "email_source_url":{"type":"string"},
+        "identity_confidence":{"type":"integer","minimum":0,"maximum":100},
+        "current_project":{"type":"string"},
+        "current_project_stage":{"type":"string"},
+        "recent_activity_current_moment":{"type":"string"},
+        "why_now":{"type":"string"},
+        "research_summary":{"type":"string"},
+        "opportunities":{"type":"array","items":{"type":"string"}},
+        "sources":{"type":"array","items":{"type":"string"}},
+        "selected_subject":{"type":"string"},
+        "message_author_language":{"type":"string"},
+        "message_english":{"type":"string"}
+    },
+    "required":[
+        "author_name_verified","country_verified","primary_language","genre","official_website",
+        "public_professional_email","email_source_url","identity_confidence","current_project",
+        "current_project_stage","recent_activity_current_moment","why_now","research_summary",
+        "opportunities","sources","selected_subject","message_author_language","message_english"
+    ]
+}
+
+async def _openai_research_author(p: dict) -> dict:
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+    seed=_author_research_seed(p)
+    instructions=legacy.prompt_text()+"""
+\n\nAUTHOR SCOUT API EXECUTION RULES:
+Work from the supplied Research Seed, but independently verify important facts with web search.
+Do not invent an email, website, book, project, representation status, or current activity.
+Do not claim to have read the author's work unless the public evidence actually supports that statement.
+Use the author's appropriate language for message_author_language, then provide a complete English version.
+Keep the subject separate from the body. Avoid em dashes/double-dash punctuation.
+The first 2–3 sentences of the message must use specific verified research.
+If no verified public professional email can be found, return an empty string for public_professional_email and email_source_url.
+Return only data matching the required structured schema.
+"""
+    payload={
+        "model":OPENAI_RESEARCH_MODEL,
+        "tools":[{"type":"web_search"}],
+        "instructions":instructions,
+        "input":"Deep-research this Author Scout Research Seed and prepare the first outreach message:\n"+json.dumps(seed,ensure_ascii=False),
+        "text":{"format":{
+            "type":"json_schema",
+            "name":"author_research_message",
+            "description":"Verified author research and personalized outreach message for Author Scout.",
+            "strict":True,
+            "schema":_AI_RESULT_SCHEMA
+        }}
+    }
+    headers={"Authorization":f"Bearer {OPENAI_API_KEY}","Content-Type":"application/json"}
+    async with legacy.httpx.AsyncClient(timeout=600.0,follow_redirects=True) as client:
+        r=await client.post("https://api.openai.com/v1/responses",headers=headers,json=payload)
+        if r.status_code>=400:
+            detail=r.text[:1200]
+            raise RuntimeError(f"OpenAI API {r.status_code}: {detail}")
+        data=r.json()
+    if data.get("status") in {"failed","cancelled","incomplete"}:
+        raise RuntimeError(f"OpenAI response status: {data.get('status')}")
+    output=_ai_output_text(data)
+    if not output:
+        raise RuntimeError("OpenAI returned no structured output text")
+    return json.loads(output)
+
+def _save_ai_result(job: dict, result: dict) -> int:
+    pid=int(job["prospect_id"]);uid=int(job["user_id"]);tid=int(job["team_id"]);t=legacy.iso()
+    website=(result.get("official_website") or "").strip()
+    email=(result.get("public_professional_email") or "").strip()
+    email_source=(result.get("email_source_url") or "").strip()
+    genre=(result.get("genre") or "").strip()
+    country=(result.get("country_verified") or "").strip()
+    summary=(result.get("research_summary") or "").strip()
+    recent=(result.get("recent_activity_current_moment") or "").strip()
+    legacy.execq("""UPDATE prospects SET
+        website=CASE WHEN :w<>'' THEN :w ELSE website END,
+        email=CASE WHEN :e<>'' THEN :e ELSE email END,
+        email_source_url=CASE WHEN :es<>'' THEN :es ELSE email_source_url END,
+        genre=CASE WHEN :g<>'' THEN :g ELSE genre END,
+        country=CASE WHEN :c<>'' THEN :c ELSE country END,
+        bio=CASE WHEN :b<>'' THEN :b ELSE bio END,
+        recent_activity=CASE WHEN :r<>'' THEN :r ELSE recent_activity END,
+        verification_status=CASE WHEN :e<>'' THEN 'ai_verified_contact' ELSE verification_status END,
+        updated_at=:d WHERE id=:p AND claimed_by_user_id=:u""",
+        w=website,e=email,es=email_source,g=genre,c=country,b=summary,r=recent,d=t,p=pid,u=uid)
+
+    subject=(result.get("selected_subject") or "").strip()
+    body=(result.get("message_author_language") or "").strip()
+    body_en=(result.get("message_english") or "").strip()
+    existing=legacy.row("""SELECT id FROM messages WHERE prospect_id=:p AND imported_by_user_id=:u
+        AND status='ready' ORDER BY id DESC LIMIT 1""",p=pid,u=uid)
+    if existing:
+        mid=int(existing["id"])
+        legacy.execq("""UPDATE messages SET subject=:s,body=:b,body_english=:be,recipient_email=:e,
+            updated_at=:d WHERE id=:i""",s=subject,b=body,be=body_en,e=email,d=t,i=mid)
+    else:
+        with legacy.engine.begin() as conn:
+            r=conn.execute(text("""INSERT INTO messages(
+                team_id,prospect_id,imported_by_user_id,subject,body,body_english,recipient_email,status,created_at,updated_at)
+                VALUES(:t,:p,:u,:s,:b,:be,:e,'ready',:d,:d) RETURNING id"""),
+                {"t":tid,"p":pid,"u":uid,"s":subject,"b":body,"be":body_en,"e":email,"d":t})
+            mid=int(r.scalar_one())
+    return mid
+
+async def _run_ai_research_job(job: dict):
+    jid=int(job["id"]);uid=int(job["user_id"]);pid=int(job["prospect_id"])
+    try:
+        t=legacy.iso()
+        legacy.execq("UPDATE ai_research_jobs SET status='running',model=:m,started_at=:d,updated_at=:d,error='' WHERE id=:i",
+                     m=OPENAI_RESEARCH_MODEL,d=t,i=jid)
+        p=legacy.row("SELECT * FROM prospects WHERE id=:p AND claimed_by_user_id=:u",p=pid,u=uid)
+        if not p:
+            raise RuntimeError("Author is not owned by this user")
+        result=await _openai_research_author(p)
+        mid=_save_ai_result(job,result)
+        t=legacy.iso()
+        legacy.execq("""UPDATE ai_research_jobs SET status='completed',result_json=:r,
+            completed_at=:d,updated_at=:d WHERE id=:i""",r=json.dumps(result,ensure_ascii=False),d=t,i=jid)
+        await _notify_user(uid,
+            f"🧠 <b>Deep research complete</b>\n{legacy.esc(p['name'])}\n"
+            f"Message #{mid} is ready for review in Author Scout.")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        legacy.execq("""UPDATE ai_research_jobs SET status='failed',error=:e,
+            completed_at=:d,updated_at=:d WHERE id=:i""",
+            e=f"{type(e).__name__}: {e}"[:1800],d=legacy.iso(),i=jid)
+        await _notify_user(uid,f"⚠️ Deep research job #{jid} failed. The author remains safely in My Authors.")
+        print(f"AI_RESEARCH_JOB_ERROR id={jid} {type(e).__name__}: {e}")
+
+async def ai_research_worker():
+    await asyncio.sleep(7)
+    running=set()
+    while True:
+        try:
+            done={t for t in running if t.done()}
+            if done:
+                await asyncio.gather(*done,return_exceptions=True)
+                running-=done
+            if not OPENAI_API_KEY:
+                await asyncio.sleep(max(30,AI_RESEARCH_POLL_SECONDS))
+                continue
+            capacity=max(0,AI_RESEARCH_CONCURRENCY-len(running))
+            if capacity:
+                jobs=legacy.rows("""SELECT * FROM ai_research_jobs WHERE status='queued'
+                    ORDER BY id ASC LIMIT :n""",n=capacity)
+                for job in jobs:
+                    legacy.execq("UPDATE ai_research_jobs SET status='starting',updated_at=:d WHERE id=:i AND status='queued'",
+                                 d=legacy.iso(),i=job["id"])
+                    fresh=legacy.row("SELECT * FROM ai_research_jobs WHERE id=:i",i=job["id"])
+                    if fresh and fresh.get("status")=="starting":
+                        task=asyncio.create_task(_run_ai_research_job(fresh))
+                        running.add(task)
+            await asyncio.sleep(AI_RESEARCH_POLL_SECONDS)
+        except asyncio.CancelledError:
+            for task in running:task.cancel()
+            if running:await asyncio.gather(*running,return_exceptions=True)
+            raise
+        except Exception as e:
+            print(f"AI_RESEARCH_WORKER_ERROR {type(e).__name__}: {e}")
+            await asyncio.sleep(AI_RESEARCH_POLL_SECONDS)
+
+
+# ---------------------------------------------------------------------------
 # Web dashboard API + queued research
 # ---------------------------------------------------------------------------
 
@@ -1824,6 +2044,63 @@ async def web_message_send(request: legacy.Request, message_id: int):
         WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",e=sender["email"],u=uid,d=t,i=message_id)
     return {"ok":True,"sent":True,"recipient":recipient,"sender_email":sender["email"],
             "message":_web_message(message_id,uid)}
+
+@app.get("/api/v1/ai/status")
+async def web_ai_status(request: legacy.Request):
+    ctx=_web_auth(request);_auth_team(ctx);uid=int(ctx.get("uid") or 0)
+    rows=legacy.rows("SELECT status,COUNT(*) c FROM ai_research_jobs WHERE user_id=:u GROUP BY status",u=uid)
+    counts={r["status"]:int(r["c"]) for r in rows}
+    return {"ok":True,"configured":bool(OPENAI_API_KEY),"model":OPENAI_RESEARCH_MODEL,"counts":counts}
+
+@app.post("/api/v1/authors/{prospect_id}/ai-research")
+async def web_ai_research_author(request: legacy.Request, prospect_id: int):
+    ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0);tid=int(team["id"])
+    if not OPENAI_API_KEY:
+        raise legacy.HTTPException(status_code=503,detail="OpenAI research is not configured yet. Add OPENAI_API_KEY on the backend.")
+    p=legacy.row("SELECT id,name FROM prospects WHERE id=:p AND claimed_by_user_id=:u",p=prospect_id,u=uid)
+    if not p:raise legacy.HTTPException(status_code=404,detail="Author not found")
+    active=legacy.row("""SELECT id,status FROM ai_research_jobs WHERE user_id=:u AND prospect_id=:p
+        AND status IN ('queued','starting','running') ORDER BY id DESC LIMIT 1""",u=uid,p=prospect_id)
+    if active:return {"ok":True,"job_id":int(active["id"]),"status":active["status"]}
+    t=legacy.iso()
+    with legacy.engine.begin() as conn:
+        r=conn.execute(text("""INSERT INTO ai_research_jobs(user_id,team_id,prospect_id,status,model,created_at,updated_at)
+            VALUES(:u,:t,:p,'queued',:m,:d,:d) RETURNING id"""),
+            {"u":uid,"t":tid,"p":prospect_id,"m":OPENAI_RESEARCH_MODEL,"d":t})
+        jid=int(r.scalar_one())
+    return {"ok":True,"job_id":jid,"status":"queued","author":p["name"]}
+
+@app.post("/api/v1/ai/research-batch")
+async def web_ai_research_batch(request: legacy.Request):
+    ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0);tid=int(team["id"])
+    if not OPENAI_API_KEY:
+        raise legacy.HTTPException(status_code=503,detail="OpenAI research is not configured yet. Add OPENAI_API_KEY on the backend.")
+    body=await request.json()
+    limit=max(1,min(100,int(body.get("limit") or 25)))
+    prospects=legacy.rows("""SELECT p.id,p.name FROM prospects p
+        WHERE p.claimed_by_user_id=:u
+        AND NOT EXISTS (SELECT 1 FROM ai_research_jobs j WHERE j.user_id=:u AND j.prospect_id=p.id
+            AND j.status IN ('queued','starting','running','completed'))
+        ORDER BY p.id ASC LIMIT :n""",u=uid,n=limit)
+    ids=[]
+    t=legacy.iso()
+    for p in prospects:
+        with legacy.engine.begin() as conn:
+            r=conn.execute(text("""INSERT INTO ai_research_jobs(user_id,team_id,prospect_id,status,model,created_at,updated_at)
+                VALUES(:u,:t,:p,'queued',:m,:d,:d) RETURNING id"""),
+                {"u":uid,"t":tid,"p":p["id"],"m":OPENAI_RESEARCH_MODEL,"d":t})
+            ids.append(int(r.scalar_one()))
+    return {"ok":True,"queued":len(ids),"job_ids":ids}
+
+@app.get("/api/v1/ai/jobs")
+async def web_ai_jobs(request: legacy.Request, limit: int=100):
+    ctx=_web_auth(request);_auth_team(ctx);uid=int(ctx.get("uid") or 0)
+    limit=max(1,min(200,int(limit)))
+    rs=legacy.rows("""SELECT j.*,p.name author_name FROM ai_research_jobs j
+        JOIN prospects p ON p.id=j.prospect_id
+        WHERE j.user_id=:u ORDER BY j.id DESC LIMIT :n""",u=uid,n=limit)
+    return {"ok":True,"jobs":rs}
+
 
 @app.get("/api/v1/source-status")
 async def web_source_status(request: legacy.Request):
@@ -2537,15 +2814,17 @@ async def connection_startup():
     app.state.connection_worker = asyncio.create_task(connection_worker())
     app.state.source_index_worker = asyncio.create_task(source_index_worker())
     app.state.web_research_worker = asyncio.create_task(web_research_worker())
+    app.state.ai_research_worker = asyncio.create_task(ai_research_worker())
     print("CONNECTION_WORKER started=True")
     print(f"SOURCE_INDEX_WORKER started=True enabled={SOURCE_INDEX_ENABLED}")
     print(f"WEB_RESEARCH_WORKER started=True concurrency={WEB_RESEARCH_JOB_CONCURRENCY}")
+    print(f"AI_RESEARCH_WORKER started=True configured={bool(OPENAI_API_KEY)} model={OPENAI_RESEARCH_MODEL}")
 
 
 @app.on_event("shutdown")
 async def connection_shutdown():
     global _http_client
-    for task_name in ("connection_worker","source_index_worker","web_research_worker"):
+    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker"):
         task = getattr(app.state, task_name, None)
         if task:
             task.cancel()
