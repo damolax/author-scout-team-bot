@@ -657,17 +657,43 @@ async def _preverify_pool(demand: dict, limit: int=SOURCE_INDEX_PREVERIFY_PER_CY
     return sum(v for v in results if isinstance(v,int))
 
 def _seed_default_demands() -> None:
-    if legacy.row("SELECT demand_key FROM author_search_demands LIMIT 1"):return
+    """Warm useful author markets so the reservoir grows even before a user searches.
+
+    These are discovery seeds, not team-specific claims. User searches still create
+    their own higher-priority demand patterns and the normal verification gates
+    (official website + public professional email) remain in force.
+    """
+    seed_query="emerging mid-list authors active 2026 official website public professional email"
+    existing=legacy.rows("SELECT country,query_text FROM author_search_demands")
+    existing_keys={(str(r.get("country") or "").strip().lower(),str(r.get("query_text") or "").strip().lower()) for r in existing}
+    added=0
     for country in SOURCE_INDEX_DEFAULT_COUNTRIES:
-        _record_search_demand({"country":country,"genre":"","query":"authors","name":"","language":"","gender":"any","count":10})
+        key=(country.strip().lower(),seed_query.lower())
+        if key in existing_keys:
+            continue
+        _record_search_demand({
+            "country":country,
+            "genre":"",
+            "query":seed_query,
+            "name":"",
+            "language":"",
+            "gender":"any",
+            "count":25
+        })
+        added+=1
+    print(f"SOURCE_DEFAULT_DEMANDS seeded={added} markets={len(SOURCE_INDEX_DEFAULT_COUNTRIES)}")
 
 async def source_index_worker():
     await asyncio.sleep(8)
     if not SOURCE_INDEX_ENABLED:
         print("SOURCE_INDEX_WORKER enabled=False")
         return
-    # Author indexing is demand-driven. Do not invent generic author searches.
-    # Only explicit /find requests should create author search demand.
+    # Keep a background market reservoir warm. Explicit user searches are still
+    # recorded separately and rise to the top because demand ordering uses recency.
+    try:
+        await asyncio.to_thread(_seed_default_demands)
+    except Exception as e:
+        print(f"SOURCE_DEFAULT_DEMAND_ERROR {type(e).__name__}: {e}")
     while True:
         try:
             demands=legacy.rows("""SELECT * FROM author_search_demands
