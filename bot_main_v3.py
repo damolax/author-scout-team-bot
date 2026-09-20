@@ -1120,6 +1120,20 @@ async def fast_scout_authors(spec: dict, limit: int=25, progress=None):
 
     def make_candidate(p):
         source_url=(p.get("discovery_url") or p.get("source_url") or "").strip()
+        snippet=re.sub(r"\\s+"," ",p.get("snippet") or "").strip()[:1200]
+        source_type=(p.get("source_type") or "web_search").strip()
+        source_platform=(p.get("source_domain") or legacy.host(source_url) or "").strip()
+        discovery_query=(p.get("discovery_query") or free_query or "").strip()[:1200]
+        evidence_blob=f"{snippet} {discovery_query}".lower()
+        confidence=48
+        if source_type in {"writers_association","literature_center","publisher","literary_agency","festival","directory"}:
+            confidence+=18
+        if any(x in evidence_blob for x in [" author "," writer "," novelist "," poet "," memoir","fiction","books"]):
+            confidence+=18
+        if source_url and legacy.official(source_url,p.get("name") or ""):
+            confidence+=12
+        if country_term and country_term.lower() in evidence_blob:
+            confidence+=4
         return {
             "name":p.get("name") or "",
             "country":p.get("country") or country_term or "",
@@ -1133,8 +1147,11 @@ async def fast_scout_authors(spec: dict, limit: int=25, progress=None):
             "recent_activity":"",
             "source_urls":[source_url] if source_url else [],
             "discovery_source_url":source_url,
-            "discovery_platform":p.get("source_domain") or legacy.host(source_url) or "",
-            "discovery_source_type":p.get("source_type") or "web_search",
+            "discovery_platform":source_platform,
+            "discovery_source_type":source_type,
+            "discovery_query":discovery_query,
+            "discovery_evidence":snippet,
+            "discovery_confidence":min(100,confidence),
         }
 
     def eligible(p):
