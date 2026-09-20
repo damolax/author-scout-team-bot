@@ -157,24 +157,6 @@ function Login({ onLogin, busy, error }) {
 function Dashboard({ keyValue, session, active }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
-  const downloadAuthors = async () => {
-    setError('')
-    try {
-      const res = await fetch(API_BASE + '/api/v1/authors/export.csv', {
-        headers: { 'X-Author-Scout-Key': keyValue }
-      })
-      if (!res.ok) throw new Error('Could not download authors')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'author-scout-my-authors.csv'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
-    } catch (e) { setError(e.message) }
-  }
   const load = useCallback(async () => {
     try { setData(await request('/api/v1/dashboard', keyValue)); setError('') }
     catch (e) { setError(e.message) }
@@ -240,7 +222,7 @@ function Dashboard({ keyValue, session, active }) {
 
 function Research({ keyValue, active }) {
   const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState({ name:'', country:'', genre:'', gender:'any', language:'', year:'2026' })
+  const [filters, setFilters] = useState({ name:'', country:'', genre:'', gender:'any', language:'', year:'' })
   const [showMoreFilters, setShowMoreFilters] = useState(false)
   const [duration, setDuration] = useState(10)
   const [jobs, setJobs] = useState([])
@@ -477,6 +459,25 @@ function Authors({ keyValue, active }) {
   const [selectedSeed, setSelectedSeed] = useState(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const downloadAuthors = async () => {
+    setError(''); setNotice('')
+    try {
+      const res = await fetch(API_BASE + '/api/v1/authors/export.csv', {
+        headers: { 'X-Author-Scout-Key': keyValue }
+      })
+      if (!res.ok) throw new Error('Could not download authors')
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'author-scout-my-authors.csv'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setNotice('Author download prepared.')
+    } catch (e) { setError(e.message) }
+  }
   const load = useCallback(async () => {
     try {
       const q = search.trim() ? '&search=' + encodeURIComponent(search.trim()) : ''
