@@ -457,8 +457,51 @@ function Authors({ keyValue, active }) {
   const [authors, setAuthors] = useState([])
   const [search, setSearch] = useState('')
   const [selectedSeed, setSelectedSeed] = useState(null)
+  const [aiStatus, setAiStatus] = useState(null)
+  const [aiJobs, setAiJobs] = useState([])
+  const [aiBusy, setAiBusy] = useState(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const loadAi = useCallback(async () => {
+    if (!active) return
+    try {
+      const [status, jobs] = await Promise.all([
+        request('/api/v1/ai/status', keyValue),
+        request('/api/v1/ai/jobs?limit=200', keyValue)
+      ])
+      setAiStatus(status)
+      setAiJobs(jobs.jobs || [])
+    } catch (e) {
+      setAiStatus({ configured:false, error:e.message })
+    }
+  }, [keyValue, active])
+
+  useEffect(() => { if (active) loadAi() }, [active, loadAi])
+
+  const aiJobFor = (id) => aiJobs.find(j => Number(j.prospect_id) === Number(id))
+
+  const queueAiResearch = async (id) => {
+    setAiBusy(id); setError(''); setNotice('')
+    try {
+      const d = await request('/api/v1/authors/' + id + '/ai-research', keyValue, { method:'POST', body:'{}' })
+      setNotice('Deep research queued. The finished message will appear in Messages.')
+      await loadAi()
+    } catch (e) { setError(e.message) }
+    finally { setAiBusy(null) }
+  }
+
+  const queueAiBatch = async () => {
+    setAiBusy('batch'); setError(''); setNotice('')
+    try {
+      const d = await request('/api/v1/ai/research-batch', keyValue, {
+        method:'POST', body:JSON.stringify({ limit:25 })
+      })
+      setNotice((d.queued || 0) + ' authors queued for deep research.')
+      await loadAi()
+    } catch (e) { setError(e.message) }
+    finally { setAiBusy(null) }
+  }
+
   const downloadAuthors = async () => {
     setError(''); setNotice('')
     try {
@@ -516,11 +559,23 @@ function Authors({ keyValue, active }) {
         <div><div className="eyebrow">My author library</div><h1>My Authors</h1><p>Authors exclusively claimed to your Author Scout account.</p></div>
         <div className="page-head-actions">
           <input className="search-box" placeholder="Search authors…" value={search} onChange={e => setSearch(e.target.value)} />
+          {aiStatus?.configured && <button className="button button-quiet" disabled={aiBusy === 'batch'} onClick={queueAiBatch}>
+            {aiBusy === 'batch' ? 'Queuing…' : 'Deep Research 25'}
+          </button>}
           <button className="button button-primary" onClick={downloadAuthors}>Download CSV</button>
         </div>
       </div>
+      <div className={'ai-bridge-strip ' + (aiStatus?.configured ? 'connected' : 'disconnected')}>
+        <div>
+          <strong>{aiStatus?.configured ? 'AI deep research connected' : 'AI deep research not connected yet'}</strong>
+          <span>{aiStatus?.configured
+            ? ('Model: ' + (aiStatus.model || 'configured') + ' · completed ' + (aiStatus.counts?.completed || 0))
+            : 'Scout and downloads work normally. The server needs an OpenAI API key before automatic deep research can run.'}</span>
+        </div>
+        {aiStatus?.configured && <span className="ai-dot">Ready</span>}
+      </div>
       {notice && <div className="alert alert-success">{notice}</div>}
-      {error && <div className="alert alert-error">{error}</div>}
+      {error && <div className="alert alert-error">{error}</div>
       <div className="panel table-panel">
         {!authors.length ? <Empty title="No matching authors" body="Run a Scout job to start building your author library." /> :
         <div className="table-wrap">
@@ -531,7 +586,16 @@ function Authors({ keyValue, active }) {
                 <td>
                   <strong>{a.name}</strong>
                   <small>#{a.id}{a.discovery_confidence ? ' · ' + a.discovery_confidence + '% identity confidence' : ''}</small>
-                  <button className="seed-link" onClick={() => setSelectedSeed(a)}>Research Seed</button>
+                  <div className="author-row-actions">
+                    <button className="seed-link" onClick={() => setSelectedSeed(a)}>Research Seed</button>
+                    {aiStatus?.configured && (() => {
+                      const job = aiJobFor(a.id)
+                      const activeJob = job && ['queued','starting','running'].includes(job.status)
+                      return <button className="seed-link ai-action" disabled={activeJob || aiBusy === a.id} onClick={() => queueAiResearch(a.id)}>
+                        {activeJob ? 'Researching…' : job?.status === 'completed' ? 'Research Again' : 'Deep Research'}
+                      </button>
+                    })()}
+                  </div>
                 </td>
                 <td>{a.country || '—'}</td>
                 <td>{a.genre || '—'}</td>
