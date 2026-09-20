@@ -384,3 +384,18 @@ tbody tr:hover{background:#fff9d9}
 .author-row-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px}
 .seed-link.ai-action{color:#3c623f}
 .seed-link:disabled{opacity:.45;cursor:not-allowed}
+
+.chatgpt-connect-panel{margin-bottom:14px;background:linear-gradient(180deg,#fffdf4,#fbfaf5)}
+.chatgpt-flow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:14px 0}
+.chatgpt-flow>div{display:flex;gap:9px;align-items:flex-start;border:1px solid #e7e2cf;background:#fff;border-radius:15px;padding:11px}
+.chatgpt-flow strong{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;height:24px;border-radius:50%;background:#f6da63;color:#302d22;font-size:10px}
+.chatgpt-flow span{font-size:9px;line-height:1.5;color:#69665e}
+.connection-code-box{display:flex;justify-content:space-between;align-items:center;gap:14px;border:1px solid #ded9c2;background:#fff5bd;border-radius:18px;padding:14px 16px}
+.connection-code-box>div:first-child{display:flex;flex-direction:column;gap:4px;min-width:0}
+.connection-code-box span{font-size:8px;text-transform:uppercase;letter-spacing:.07em;color:#81783c;font-weight:800}
+.connection-code-box strong{font-size:20px;letter-spacing:.08em;color:#24231f;word-break:break-all}
+.connection-code-box small{font-size:8px;color:#777268}
+@media(max-width:760px){
+  .chatgpt-flow{grid-template-columns:1fr}
+  .connection-code-box{align-items:flex-start;flex-direction:column}
+}
