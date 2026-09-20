@@ -144,14 +144,14 @@ function Login({ onLogin, busy, error }) {
   )
 }
 
-function Dashboard({ keyValue, session }) {
+function Dashboard({ keyValue, session, active }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const load = useCallback(async () => {
     try { setData(await request('/api/v1/dashboard', keyValue)); setError('') }
     catch (e) { setError(e.message) }
   }, [keyValue])
-  usePolling(load, 8000)
+  usePolling(load, 8000, active)
 
   const c = data?.counts || {}
   const pool = data?.pool || {}
@@ -210,7 +210,7 @@ function Dashboard({ keyValue, session }) {
   )
 }
 
-function Research({ keyValue }) {
+function Research({ keyValue, active }) {
   const [query, setQuery] = useState('')
   const [count, setCount] = useState(25)
   const [jobs, setJobs] = useState([])
@@ -230,7 +230,7 @@ function Research({ keyValue }) {
     } catch (e) { setError(e.message) }
   }, [keyValue, selected?.job?.id])
 
-  usePolling(loadJobs, 4000)
+  usePolling(loadJobs, 4000, active)
 
   const create = async (e) => {
     e.preventDefault()
@@ -347,7 +347,7 @@ function Research({ keyValue }) {
   )
 }
 
-function Authors({ keyValue }) {
+function Authors({ keyValue, active }) {
   const [authors, setAuthors] = useState([])
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
@@ -358,7 +358,7 @@ function Authors({ keyValue }) {
       setAuthors(d.authors || []); setError('')
     } catch (e) { setError(e.message) }
   }, [keyValue, search])
-  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t) }, [load])
+  useEffect(() => { if (!active) return; const t = setTimeout(load, 250); return () => clearTimeout(t) }, [load, active])
 
   return (
     <section>
@@ -390,7 +390,7 @@ function Authors({ keyValue }) {
 }
 
 
-function Messages({ keyValue }) {
+function Messages({ keyValue, active }) {
   const [items, setItems] = useState([])
   const [status, setStatus] = useState('ready')
   const [search, setSearch] = useState('')
@@ -415,11 +415,12 @@ function Messages({ keyValue }) {
   }, [keyValue, status, search, selected?.id])
 
   useEffect(() => {
+    if (!active) return
     const t = setTimeout(load, 250)
     return () => clearTimeout(t)
-  }, [load])
+  }, [load, active])
 
-  usePolling(load, 9000)
+  usePolling(load, 9000, active)
 
   const openGmail = async (id) => {
     setBusyId(id); setError(''); setNotice('')
@@ -549,7 +550,7 @@ function Messages({ keyValue }) {
   )
 }
 
-function Connections({ keyValue }) {
+function Connections({ keyValue, active }) {
   const [items, setItems] = useState([])
   const [status, setStatus] = useState('ready')
   const [linkedin, setLinkedin] = useState('')
@@ -564,7 +565,7 @@ function Connections({ keyValue }) {
       setItems(d.connections || []); setError('')
     } catch (e) { setError(e.message) }
   }, [keyValue, status])
-  usePolling(load, 7000)
+  usePolling(load, 7000, active)
 
   const setup = async e => {
     e.preventDefault(); setBusy(true); setError(''); setNotice('')
@@ -637,7 +638,7 @@ function Connections({ keyValue }) {
   )
 }
 
-function System({ keyValue }) {
+function System({ keyValue, active }) {
   const [source, setSource] = useState(null)
   const [health, setHealth] = useState(null)
   const [error, setError] = useState('')
@@ -650,7 +651,7 @@ function System({ keyValue }) {
       setSource(a); setHealth(b); setError('')
     } catch(e){ setError(e.message) }
   }, [keyValue])
-  usePolling(load, 10000)
+  usePolling(load, 10000, active)
 
   return (
     <section>
@@ -752,12 +753,24 @@ function AppCore() {
         </div>
 
         <main>
-          {tab === 'dashboard' && <Dashboard keyValue={keyValue} session={session} />}
-          {tab === 'research' && <Research keyValue={keyValue} />}
-          {tab === 'authors' && <Authors keyValue={keyValue} />}
-          {tab === 'messages' && <Messages keyValue={keyValue} />}
-          {tab === 'connections' && <Connections keyValue={keyValue} />}
-          {tab === 'system' && <System keyValue={keyValue} />}
+          <div className={tab === 'dashboard' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'dashboard'}>
+            <Dashboard keyValue={keyValue} session={session} active={tab === 'dashboard'} />
+          </div>
+          <div className={tab === 'research' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'research'}>
+            <Research keyValue={keyValue} active={tab === 'research'} />
+          </div>
+          <div className={tab === 'authors' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'authors'}>
+            <Authors keyValue={keyValue} active={tab === 'authors'} />
+          </div>
+          <div className={tab === 'messages' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'messages'}>
+            <Messages keyValue={keyValue} active={tab === 'messages'} />
+          </div>
+          <div className={tab === 'connections' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'connections'}>
+            <Connections keyValue={keyValue} active={tab === 'connections'} />
+          </div>
+          <div className={tab === 'system' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'system'}>
+            <System keyValue={keyValue} active={tab === 'system'} />
+          </div>
         </main>
       </div>
     </div>
