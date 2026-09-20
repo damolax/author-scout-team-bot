@@ -298,9 +298,9 @@ function Research({ keyValue, active }) {
           <div className="filter-head">
             <div>
               <label>Scout filters</label>
-              <p>Structured filters are enforced before an author is claimed. Country is a hard filter when provided.</p>
+              <p>Country is a hard filter when provided. Name and genre are checked against discovery evidence before an author is claimed.</p>
             </div>
-            <span className="strict-badge">Strict matching</span>
+            <span className="strict-badge">Strict country</span>
           </div>
 
           <div className="scout-filter-grid">
