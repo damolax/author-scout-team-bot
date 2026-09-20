@@ -457,51 +457,8 @@ function Authors({ keyValue, active }) {
   const [authors, setAuthors] = useState([])
   const [search, setSearch] = useState('')
   const [selectedSeed, setSelectedSeed] = useState(null)
-  const [aiStatus, setAiStatus] = useState(null)
-  const [aiJobs, setAiJobs] = useState([])
-  const [aiBusy, setAiBusy] = useState(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
-  const loadAi = useCallback(async () => {
-    if (!active) return
-    try {
-      const [status, jobs] = await Promise.all([
-        request('/api/v1/ai/status', keyValue),
-        request('/api/v1/ai/jobs?limit=200', keyValue)
-      ])
-      setAiStatus(status)
-      setAiJobs(jobs.jobs || [])
-    } catch (e) {
-      setAiStatus({ configured:false, error:e.message })
-    }
-  }, [keyValue, active])
-
-  usePolling(loadAi, 10000, active)
-
-  const aiJobFor = (id) => aiJobs.find(j => Number(j.prospect_id) === Number(id))
-
-  const queueAiResearch = async (id) => {
-    setAiBusy(id); setError(''); setNotice('')
-    try {
-      const d = await request('/api/v1/authors/' + id + '/ai-research', keyValue, { method:'POST', body:'{}' })
-      setNotice('Deep research queued. The finished message will appear in Messages.')
-      await loadAi()
-    } catch (e) { setError(e.message) }
-    finally { setAiBusy(null) }
-  }
-
-  const queueAiBatch = async () => {
-    setAiBusy('batch'); setError(''); setNotice('')
-    try {
-      const d = await request('/api/v1/ai/research-batch', keyValue, {
-        method:'POST', body:JSON.stringify({ limit:25 })
-      })
-      setNotice((d.queued || 0) + ' authors queued for deep research.')
-      await loadAi()
-    } catch (e) { setError(e.message) }
-    finally { setAiBusy(null) }
-  }
-
   const downloadAuthors = async () => {
     setError(''); setNotice('')
     try {
@@ -559,20 +516,8 @@ function Authors({ keyValue, active }) {
         <div><div className="eyebrow">My author library</div><h1>My Authors</h1><p>Authors exclusively claimed to your Author Scout account.</p></div>
         <div className="page-head-actions">
           <input className="search-box" placeholder="Search authors…" value={search} onChange={e => setSearch(e.target.value)} />
-          {aiStatus?.configured && <button className="button button-quiet" disabled={aiBusy === 'batch'} onClick={queueAiBatch}>
-            {aiBusy === 'batch' ? 'Queuing…' : 'Deep Research 25'}
-          </button>}
           <button className="button button-primary" onClick={downloadAuthors}>Download Excel</button>
         </div>
-      </div>
-      <div className={'ai-bridge-strip ' + (aiStatus?.configured ? 'connected' : 'disconnected')}>
-        <div>
-          <strong>{aiStatus?.configured ? 'AI deep research connected' : 'AI deep research not connected yet'}</strong>
-          <span>{aiStatus?.configured
-            ? ('Model: ' + (aiStatus.model || 'configured') + ' · completed ' + (aiStatus.counts?.completed || 0))
-            : 'Scout and downloads work normally. The server needs an OpenAI API key before automatic deep research can run.'}</span>
-        </div>
-        {aiStatus?.configured && <span className="ai-dot">Ready</span>}
       </div>
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <div className="alert alert-error">{error}</div>
@@ -588,13 +533,6 @@ function Authors({ keyValue, active }) {
                   <small>#{a.id}{a.discovery_confidence ? ' · ' + a.discovery_confidence + '% identity confidence' : ''}</small>
                   <div className="author-row-actions">
                     <button className="seed-link" onClick={() => setSelectedSeed(a)}>Research Seed</button>
-                    {aiStatus?.configured && (() => {
-                      const job = aiJobFor(a.id)
-                      const activeJob = job && ['queued','starting','running'].includes(job.status)
-                      return <button className="seed-link ai-action" disabled={activeJob || aiBusy === a.id} onClick={() => queueAiResearch(a.id)}>
-                        {activeJob ? 'Researching…' : job?.status === 'completed' ? 'Research Again' : 'Deep Research'}
-                      </button>
-                    })()}
                   </div>
                 </td>
                 <td>{a.country || '—'}</td>
@@ -900,40 +838,102 @@ function Connections({ keyValue, active }) {
 function System({ keyValue, active }) {
   const [source, setSource] = useState(null)
   const [health, setHealth] = useState(null)
+  const [plugin, setPlugin] = useState(null)
+  const [connectionCode, setConnectionCode] = useState(null)
+  const [codeBusy, setCodeBusy] = useState(false)
+  const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+
   const load = useCallback(async () => {
     try {
-      const [a,b] = await Promise.all([
+      const [a,b,p] = await Promise.all([
         request('/api/v1/source-status', keyValue),
-        request('/api/v1/health', '')
+        request('/api/v1/health', ''),
+        request('/api/v1/plugin/status', keyValue)
       ])
-      setSource(a); setHealth(b); setError('')
+      setSource(a); setHealth(b); setPlugin(p); setError('')
     } catch(e){ setError(e.message) }
   }, [keyValue])
   usePolling(load, 10000, active)
 
+  const generateChatGPTCode = async () => {
+    setCodeBusy(true); setError(''); setNotice('')
+    try {
+      const d = await request('/api/v1/plugin/link-code', keyValue, { method:'POST', body:'{}' })
+      setConnectionCode(d)
+      setNotice('One-time ChatGPT connection code created. It expires in about 15 minutes and can only be used once.')
+    } catch(e){ setError(e.message) }
+    finally { setCodeBusy(false) }
+  }
+
+  const copyConnectionCode = async () => {
+    if (!connectionCode?.code) return
+    try {
+      await navigator.clipboard.writeText(connectionCode.code)
+      setNotice('ChatGPT connection code copied.')
+    } catch { setError('Could not copy the connection code.') }
+  }
+
   return (
     <section>
       <div className="page-head">
-        <div><div className="eyebrow">Infrastructure</div><h1>System</h1><p>What the background research engine is actually doing.</p></div>
+        <div><div className="eyebrow">Connections & infrastructure</div><h1>System</h1><p>Connect ChatGPT and review what the background Scout engine is doing.</p></div>
         <button className="button button-quiet" onClick={load}>Refresh</button>
       </div>
+      {notice && <div className="alert alert-success">{notice}</div>}
       {error && <div className="alert alert-error">{error}</div>}
+
+      <div className="panel chatgpt-connect-panel">
+        <div className="panel-head">
+          <div>
+            <span className="kicker">ChatGPT connection</span>
+            <h2>Use your own ChatGPT plan for deep author research.</h2>
+            <p className="muted">Author Scout does not need an OpenAI API key for this connection. The public Author Scout plugin lets ChatGPT fetch only your authors and, where supported, save completed research and first-message drafts back into Author Scout.</p>
+          </div>
+          <span className={'status ' + (plugin?.public_plugin_ready ? 'status-ready' : 'status-running')}>
+            {plugin?.public_plugin_ready ? 'Plugin backend ready' : 'Checking'}
+          </span>
+        </div>
+
+        <div className="chatgpt-flow">
+          <div><strong>1</strong><span>Install Author Scout in ChatGPT once it is published in the plugin directory.</span></div>
+          <div><strong>2</strong><span>When ChatGPT asks you to connect Author Scout, generate the one-time code here.</span></div>
+          <div><strong>3</strong><span>Paste the code into the Author Scout connection page. ChatGPT then accesses only your account.</span></div>
+        </div>
+
+        <div className="connection-code-box">
+          <div>
+            <span>One-time connection code</span>
+            <strong>{connectionCode?.code || 'Not generated'}</strong>
+            <small>{connectionCode?.expires_at ? 'Expires ' + fmt(connectionCode.expires_at) : 'Generate it only when ChatGPT asks you to connect.'}</small>
+          </div>
+          <div className="inline-actions">
+            <button className="button button-primary" disabled={codeBusy} onClick={generateChatGPTCode}>
+              {codeBusy ? 'Generating…' : 'Generate code'}
+            </button>
+            {connectionCode?.code && <button className="button button-quiet" onClick={copyConnectionCode}>Copy</button>}
+          </div>
+        </div>
+
+        <p className="muted">Current publication status: the integration backend and plugin package are prepared, but OpenAI still has to review/publish the public plugin before Plus/Free users can install it directly from ChatGPT.</p>
+      </div>
+
       <div className="metric-grid">
         <Metric label="API" value={health?.ok ? 'Online' : 'Checking'} sub={'v' + (health?.version || '…')} />
         <Metric label="Active demands" value={source?.demands || 0} sub="Created by real queries" />
         <Metric label="Indexed sources" value={source?.sources || 0} sub="Reusable source pages" />
-        <Metric label="Pre-verified" value={source?.verified || 0} sub="Ready reservoir candidates" />
+        <Metric label="ChatGPT research saved" value={plugin?.research_saved || 0} sub="Returned through the plugin" />
       </div>
+
       <div className="panel">
         <span className="kicker">Architecture</span>
         <h2>Vercel is the interface. Render does the long-running work.</h2>
         <div className="architecture">
           <div><strong>Vercel</strong><span>Dashboard UI</span></div><b>→</b>
-          <div><strong>Render API</strong><span>Queue + workers</span></div><b>→</b>
-          <div><strong>Neon</strong><span>Shared database</span></div>
+          <div><strong>Render API</strong><span>Scout + plugin bridge</span></div><b>→</b>
+          <div><strong>Neon</strong><span>User-owned data</span></div>
         </div>
-        <p className="muted">Telegram stays connected to the same backend as a lightweight mobile companion. Authors and connections seen here are the same records used by the bot.</p>
+        <p className="muted">Telegram remains an optional mobile companion for notifications and quick status. ChatGPT becomes the optional deep-research layer after a user connects the Author Scout plugin.</p>
       </div>
     </section>
   )
