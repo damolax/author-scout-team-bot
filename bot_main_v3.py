@@ -1437,7 +1437,9 @@ def _plugin_tools():
     write_sec=[{"type":"oauth2","scopes":["author.write"]}]
     def secured(tool, schemes):
         tool["securitySchemes"]=schemes
-        tool["_meta"]={"securitySchemes":schemes}
+        meta=dict(tool.get("_meta") or {})
+        meta["securitySchemes"]=schemes
+        tool["_meta"]=meta
         return tool
     return [
         secured({
@@ -1675,6 +1677,11 @@ async def plugin_oauth_resource_metadata():
         "scopes_supported":["author.read","author.write"],
         "resource_documentation":f"{PLUGIN_PUBLIC_BASE}/plugin/privacy"
     }
+
+@app.get("/.well-known/oauth-protected-resource/mcp")
+async def plugin_oauth_resource_metadata_mcp():
+    return await plugin_oauth_resource_metadata()
+
 
 @app.get("/.well-known/oauth-authorization-server")
 async def plugin_oauth_server_metadata():
