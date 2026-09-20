@@ -348,3 +348,7 @@ tbody tr:hover{background:#fff9d9}
 .seed-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 @media(max-width:760px){.seed-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:520px){.seed-grid{grid-template-columns:1fr}}
+
+.scout-time-progress{margin-top:10px}
+.job-time-row{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:6px;color:#7f7c72;font-size:9px}
+.job-time-row span:last-child{font-weight:700;color:#4d4b44}
