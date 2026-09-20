@@ -69,7 +69,7 @@ def init_db():
     stmts=[
       "CREATE TABLE IF NOT EXISTS users(telegram_user_id BIGINT PRIMARY KEY,username TEXT DEFAULT '',first_name TEXT DEFAULT '',team_id INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)",
       f"CREATE TABLE IF NOT EXISTS teams(id {pk},name TEXT NOT NULL,invite_code TEXT NOT NULL UNIQUE,owner_user_id BIGINT NOT NULL,created_at TEXT NOT NULL)",
-      f"CREATE TABLE IF NOT EXISTS prospects(id {pk},normalized_key TEXT NOT NULL UNIQUE,name TEXT NOT NULL,country TEXT DEFAULT '',genre TEXT DEFAULT '',website TEXT DEFAULT '',email TEXT DEFAULT '',email_source_url TEXT DEFAULT '',verification_status TEXT DEFAULT 'unverified',bio TEXT DEFAULT '',books TEXT DEFAULT '',recent_activity TEXT DEFAULT '',source_urls TEXT DEFAULT '[]',claimed_team_id INTEGER NOT NULL,claimed_by_user_id BIGINT NOT NULL,claimed_at TEXT NOT NULL,updated_at TEXT NOT NULL)",
+      f"CREATE TABLE IF NOT EXISTS prospects(id {pk},normalized_key TEXT NOT NULL UNIQUE,name TEXT NOT NULL,country TEXT DEFAULT '',genre TEXT DEFAULT '',website TEXT DEFAULT '',email TEXT DEFAULT '',email_source_url TEXT DEFAULT '',verification_status TEXT DEFAULT 'unverified',bio TEXT DEFAULT '',books TEXT DEFAULT '',recent_activity TEXT DEFAULT '',source_urls TEXT DEFAULT '[]',discovery_platform TEXT DEFAULT '',discovery_source_type TEXT DEFAULT '',discovery_source_url TEXT DEFAULT '',claimed_team_id INTEGER NOT NULL,claimed_by_user_id BIGINT NOT NULL,claimed_at TEXT NOT NULL,updated_at TEXT NOT NULL)",
       f"CREATE TABLE IF NOT EXISTS messages(id {pk},team_id INTEGER NOT NULL,prospect_id INTEGER NOT NULL,imported_by_user_id BIGINT NOT NULL,subject TEXT DEFAULT '',body TEXT DEFAULT '',status TEXT DEFAULT 'ready',sender_email TEXT DEFAULT '',sent_by_user_id BIGINT,sent_at TEXT DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL)",
       f"CREATE TABLE IF NOT EXISTS sender_emails(id {pk},telegram_user_id BIGINT NOT NULL,email TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(telegram_user_id,email))",
       f"CREATE TABLE IF NOT EXISTS scout_events(id {pk},telegram_user_id BIGINT NOT NULL,team_id INTEGER NOT NULL,prospect_id INTEGER NOT NULL,created_at TEXT NOT NULL)",
@@ -89,7 +89,10 @@ def init_db():
         "ALTER TABLE messages ADD COLUMN replied_at TEXT DEFAULT ''",
         "ALTER TABLE messages ADD COLUMN reply_notes TEXT DEFAULT ''",
         "ALTER TABLE messages ADD COLUMN sent_via TEXT DEFAULT ''",
-        "ALTER TABLE messages ADD COLUMN auto_sent INTEGER DEFAULT 0"
+        "ALTER TABLE messages ADD COLUMN auto_sent INTEGER DEFAULT 0",
+        "ALTER TABLE prospects ADD COLUMN discovery_platform TEXT DEFAULT ''",
+        "ALTER TABLE prospects ADD COLUMN discovery_source_type TEXT DEFAULT ''",
+        "ALTER TABLE prospects ADD COLUMN discovery_source_url TEXT DEFAULT ''"
     ]:
         try:
             with engine.begin() as c:
@@ -148,10 +151,13 @@ def claim(uid,tid,d):
         OR (:n<>'' AND :c<>'' AND lower(name)=lower(:n) AND lower(country)=lower(:c))
         LIMIT 1""",k=k,e=email,w=website,n=name,c=country)
     if ex:return ex["id"],False,ex
-    vals={"k":k,"n":name,"c":country,"g":d.get("genre",""),"w":d.get("website",""),"e":email,"es":d.get("email_source_url",""),"v":d.get("verification_status","unverified"),"b":d.get("bio",""),"bk":d.get("books",""),"a":d.get("recent_activity",""),"s":json.dumps(d.get("source_urls",[])),"tid":tid,"uid":uid,"t":iso()}
+    source_url=(d.get("discovery_source_url") or "").strip()
+    source_platform=(d.get("discovery_platform") or host(source_url) or "").strip()
+    source_type=(d.get("discovery_source_type") or "").strip()
+    vals={"k":k,"n":name,"c":country,"g":d.get("genre",""),"w":d.get("website",""),"e":email,"es":d.get("email_source_url",""),"v":d.get("verification_status","unverified"),"b":d.get("bio",""),"bk":d.get("books",""),"a":d.get("recent_activity",""),"s":json.dumps(d.get("source_urls",[])),"dp":source_platform,"dst":source_type,"dsu":source_url,"tid":tid,"uid":uid,"t":iso()}
     try:
         with engine.begin() as c:
-            r=c.execute(text("INSERT INTO prospects(normalized_key,name,country,genre,website,email,email_source_url,verification_status,bio,books,recent_activity,source_urls,claimed_team_id,claimed_by_user_id,claimed_at,updated_at) VALUES(:k,:n,:c,:g,:w,:e,:es,:v,:b,:bk,:a,:s,:tid,:uid,:t,:t) RETURNING id"),vals)
+            r=c.execute(text("INSERT INTO prospects(normalized_key,name,country,genre,website,email,email_source_url,verification_status,bio,books,recent_activity,source_urls,discovery_platform,discovery_source_type,discovery_source_url,claimed_team_id,claimed_by_user_id,claimed_at,updated_at) VALUES(:k,:n,:c,:g,:w,:e,:es,:v,:b,:bk,:a,:s,:dp,:dst,:dsu,:tid,:uid,:t,:t) RETURNING id"),vals)
             pid=int(r.scalar_one())
             c.execute(text("INSERT INTO scout_events(telegram_user_id,team_id,prospect_id,created_at) VALUES(:uid,:tid,:pid,:t)"),{"uid":uid,"tid":tid,"pid":pid,"t":vals["t"]})
         return pid,True,None
