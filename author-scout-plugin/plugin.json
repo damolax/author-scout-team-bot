@@ -1,0 +1,34 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "author-scout",
+  "version": "0.1.0",
+  "description": "Connect ChatGPT to your private Author Scout author pipeline, research discovered authors, and return personalized first-message drafts to Author Scout.",
+  "author": {
+    "name": "Author Scout",
+    "url": "https://author-scout-team-bot.vercel.app"
+  },
+  "homepage": "https://author-scout-team-bot.vercel.app",
+  "repository": "https://github.com/damolax/author-scout-team-bot",
+  "keywords": ["authors", "research", "outreach", "publishing", "crm"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Author Scout",
+        "shortDescription": "Research your Author Scout authors from ChatGPT.",
+        "longDescription": "Connect your Author Scout account, fetch only the authors claimed to you, continue deep author research in ChatGPT, and save verified research plus personalized first-message drafts back to Author Scout. The plugin never sends email automatically.",
+        "developerName": "Author Scout",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://author-scout-team-bot.vercel.app",
+        "privacyPolicyURL": "https://author-scout-team-bot.onrender.com/plugin/privacy",
+        "termsOfServiceURL": "https://author-scout-team-bot.onrender.com/plugin/terms",
+        "defaultPrompt": [
+          "Get my next 25 unresearched Author Scout authors and research them deeply.",
+          "Research my newest Author Scout authors and create personalized first messages in each author's language plus English.",
+          "Show me the Author Scout messages that are ready for review."
+        ],
+        "brandColor": "#F6DA63"
+      }
+    }
+  }
+}
