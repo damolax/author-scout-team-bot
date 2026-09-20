@@ -688,7 +688,7 @@ const NAV = [
   ['system','System','⚙'],
 ]
 
-export default function App() {
+function AppCore() {
   const [keyValue, setKeyValue] = useState(() => sessionStorage.getItem('authorScoutKey') || '')
   const [session, setSession] = useState(null)
   const [checking, setChecking] = useState(Boolean(keyValue))
@@ -761,5 +761,14 @@ export default function App() {
         </main>
       </div>
     </div>
+  )
+}
+
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <AppCore />
+    </AppErrorBoundary>
   )
 }
