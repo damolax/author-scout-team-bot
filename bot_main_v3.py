@@ -654,7 +654,7 @@ def _pool_candidates(spec: dict, limit: int=100) -> list[dict]:
         if name_filter and name_filter not in (r.get("name") or "").lower():continue
         blob=" ".join([r.get("name") or "",r.get("genre") or "",r.get("snippet") or "",r.get("discovery_query") or "",r.get("source_type") or ""]).lower()
         overlap=sum(1 for x in qtokens if x in blob)
-        if genre and genre not in blob and r.get("genre"):continue
+        if genre and genre not in blob:continue
         score=(100 if r.get("status")=="verified" else 0)+overlap*12
         scored.append((score,r))
     scored.sort(key=lambda x:(-x[0],int(x[1].get("times_selected") or 0)))
@@ -715,7 +715,10 @@ async def _index_demand(demand: dict) -> dict:
     genre=demand.get("genre") or ""
     qtext=demand.get("query_text") or ""
     name_filter=demand.get("name_filter") or ""
-    base=" ".join(x for x in [country,genre,qtext,name_filter] if x).strip() or "authors"
+    language=demand.get("language") or ""
+    gender=(demand.get("gender") or "any").strip().lower()
+    gender_term=gender if gender in {"male","female"} else ""
+    base=" ".join(x for x in [country,genre,language,gender_term,qtext,name_filter] if x).strip() or "authors"
     routes=[f'{base} authors directory writers association',f'{base} literature center writers members',
             f'{base} literary agency publisher authors']
     sets=await asyncio.gather(*(fast_search(q,15) for q in routes),return_exceptions=True)
