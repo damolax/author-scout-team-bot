@@ -5,11 +5,22 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://author-scout-tea
 async function request(path, key, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
   if (key) headers['X-Author-Scout-Key'] = key
-  const res = await fetch(API_BASE + path, { ...options, headers })
-  let body = {}
-  try { body = await res.json() } catch { body = {} }
-  if (!res.ok) throw new Error(body.detail || body.error || 'Request failed')
-  return body
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 25000)
+  try {
+    const res = await fetch(API_BASE + path, { ...options, headers, signal: controller.signal })
+    let body = {}
+    try { body = await res.json() } catch { body = {} }
+    if (!res.ok) throw new Error(body.detail || body.error || 'Request failed')
+    return body
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      throw new Error('Author Scout took too long to respond. Please try again.')
+    }
+    throw e
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 function fmt(value) {
@@ -36,6 +47,36 @@ function usePolling(callback, delay, active = true) {
     run()
     return () => { cancelled = true; clearTimeout(timer) }
   }, [callback, delay, active])
+}
+
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+  componentDidCatch(error, info) {
+    console.error('AUTHOR_SCOUT_UI_ERROR', error, info)
+  }
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="login-shell">
+        <div className="login-card">
+          <div className="brand brand-login">
+            <div className="brand-mark">AS</div>
+            <div><strong>Author Scout</strong><span>Workspace recovery</span></div>
+          </div>
+          <h1>We hit a display problem.</h1>
+          <p className="login-copy">Your login may already be valid. Refresh the page once. If this returns, send us the message below.</p>
+          <div className="alert alert-error">{String(this.state.error?.message || this.state.error)}</div>
+          <button className="button button-primary button-block" onClick={() => window.location.reload()}>Reload Author Scout</button>
+        </div>
+      </div>
+    )
+  }
 }
 
 function Status({ value }) {
@@ -659,7 +700,9 @@ export default function App() {
     try {
       const s = await request('/api/v1/session', key)
       sessionStorage.setItem('authorScoutKey', key)
-      setKeyValue(key); setSession(s)
+      setKeyValue(key)
+      setChecking(false)
+      setSession(s)
     } catch(e) {
       sessionStorage.removeItem('authorScoutKey')
       setKeyValue(''); setSession(null); setLoginError(e.message)
