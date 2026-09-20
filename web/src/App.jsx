@@ -505,7 +505,7 @@ function Authors({ keyValue, active }) {
   const downloadAuthors = async () => {
     setError(''); setNotice('')
     try {
-      const res = await fetch(API_BASE + '/api/v1/authors/export.csv', {
+      const res = await fetch(API_BASE + '/api/v1/authors/export.xlsx', {
         headers: { 'X-Author-Scout-Key': keyValue }
       })
       if (!res.ok) throw new Error('Could not download authors')
@@ -513,12 +513,12 @@ function Authors({ keyValue, active }) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'author-scout-my-authors.csv'
+      a.download = 'author-scout-my-authors.xlsx'
       document.body.appendChild(a)
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-      setNotice('Author download prepared.')
+      setNotice('Excel author file downloaded.')
     } catch (e) { setError(e.message) }
   }
   const load = useCallback(async () => {
@@ -562,7 +562,7 @@ function Authors({ keyValue, active }) {
           {aiStatus?.configured && <button className="button button-quiet" disabled={aiBusy === 'batch'} onClick={queueAiBatch}>
             {aiBusy === 'batch' ? 'Queuing…' : 'Deep Research 25'}
           </button>}
-          <button className="button button-primary" onClick={downloadAuthors}>Download CSV</button>
+          <button className="button button-primary" onClick={downloadAuthors}>Download Excel</button>
         </div>
       </div>
       <div className={'ai-bridge-strip ' + (aiStatus?.configured ? 'connected' : 'disconnected')}>
