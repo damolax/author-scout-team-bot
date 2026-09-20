@@ -784,11 +784,19 @@ def _author_candidate_quality(name: str, hint_url: str="", snippet: str="") -> b
     generic={
         "tech tips","contact us","about us","our team","board members","editorial team",
         "staff directory","book reviews","latest news","home page","privacy policy",
-        "terms conditions","customer service","support team","press office","media contact"
+        "terms conditions","customer service","support team","press office","media contact",
+        "member login","job opportunities","search store","search jobs","microsoft bing",
+        "writers house","projected growth rate","projected number of new jobs","released gas"
     }
     if low in generic:return False
-    if any(x in low for x in ["tips","news","blog","directory","support","contact","office","team","board","library"]):
-        return False
+    organization_markers=[
+        "literary management","literary agency","writers association","writers union",
+        "publishing house","publisher group","editorial team","member login"
+    ]
+    if any(x in low for x in organization_markers):return False
+    junk_tokens={"job","jobs","login","search","store","directory","support","contact","office","team","board","library"}
+    if any(tok in junk_tokens for tok in re.findall(r"[a-z]+",low)):return False
+    if any(x in low for x in ["tips","news","blog"]):return False
     # A plausible personal name should be mostly alphabetic name-like tokens.
     toks=re.findall(r"[A-Za-zÀ-ÿ'’-]+",n)
     if len(toks)!=len(n.split()): return False
