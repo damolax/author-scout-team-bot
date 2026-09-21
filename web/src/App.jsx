@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://author-scout-team-bot.onrender.com').replace(/\/$/, '')
 
@@ -121,34 +121,24 @@ function Login({ onLogin, busy, error }) {
       <div className="login-card">
         <div className="brand brand-login">
           <div className="brand-mark">AS</div>
-          <div>
-            <strong>Author Scout</strong>
-            <span>Research Intelligence</span>
-          </div>
+          <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
         </div>
-        <h1>Open your workspace</h1>
-        <p className="login-copy">
-          In Telegram, send <code>/webkey</code>, copy the signed key, then paste it here.
-          Your Render secret is never exposed to the browser.
-        </p>
+        <h1>Sign in</h1>
+        <p className="login-copy">Send <code>/webkey</code> to @Authorscoutbot, then paste the key below.</p>
         <form onSubmit={(e) => { e.preventDefault(); onLogin(key.trim()) }}>
           <label>Web access key</label>
           <textarea
             rows="4"
             value={key}
             onChange={(e) => setKey(e.target.value)}
-            placeholder="Paste the key from /webkey"
+            placeholder="Paste your /webkey"
             autoFocus
           />
           {error && <div className="alert alert-error">{error}</div>}
           <button className="button button-primary button-block" disabled={!key.trim() || busy}>
-            {busy ? 'Checking workspace…' : 'Enter Author Scout'}
+            {busy ? 'Checking…' : 'Enter Author Scout'}
           </button>
         </form>
-        <div className="login-foot">
-          <span>Backend</span>
-          <code>{API_BASE.replace('https://', '')}</code>
-        </div>
       </div>
     </div>
   )
@@ -163,58 +153,20 @@ function Dashboard({ keyValue, session, active }) {
   }, [keyValue])
   usePolling(load, 8000, active)
 
-  const c = data?.counts || {}
-  const pool = data?.pool || {}
+  const counts = data?.counts || {}
+  const name = session?.user?.first_name || session?.user?.username || 'there'
   return (
     <section>
       <div className="page-head">
-        <div>
-          <div className="eyebrow">{session?.team?.name || 'Author Scout'} workspace</div>
-          <h1>Welcome in, {session?.user?.first_name || session?.user?.username || 'there'}</h1>
-          <p>Your author research, outreach and relationship pipeline in one place.</p>
-        </div>
+        <div><div className="eyebrow">Overview</div><h1>Hi, {name}</h1></div>
         <button className="button button-quiet" onClick={load}>Refresh</button>
       </div>
       {error && <div className="alert alert-error">{error}</div>}
       <div className="metric-grid">
-        <Metric label="Authors" value={c.authors} sub="Qualified and saved" />
-        <Metric label="Research" value={c.jobs_queued} sub="Running now" />
-        <Metric label="Connections" value={c.connections_ready} sub="Ready to review" />
-        <Metric label="Messages" value={c.messages_ready} sub="Ready for outreach" />
-      </div>
-      <div className="two-col">
-        <div className="panel">
-          <div className="panel-head">
-            <div><span className="kicker">Research engine</span><h2>Pipeline health</h2></div>
-          </div>
-          <div className="stat-list">
-            <div><span>Completed research jobs</span><strong>{c.jobs_completed || 0}</strong></div>
-            <div><span>Candidate reservoir</span><strong>{pool.candidates || 0}</strong></div>
-            <div><span>Pre-verified candidates</span><strong>{pool.verified || 0}</strong></div>
-            <div><span>Indexed sources</span><strong>{pool.sources || 0}</strong></div>
-          </div>
-        </div>
-        <div className="panel">
-          <div className="panel-head">
-            <div><span className="kicker">Activity</span><h2>Acquisition status</h2></div>
-          </div>
-          <div className="stat-list">
-            <div><span>Connections completed</span><strong>{c.connections_done || 0}</strong></div>
-            <div><span>Messages sent</span><strong>{c.messages_sent || 0}</strong></div>
-            <div><span>Messages ready</span><strong>{c.messages_ready || 0}</strong></div>
-            <div><span>Background connection research</span><strong>On</strong></div>
-          </div>
-        </div>
-      </div>
-      <div className="panel callout">
-        <div>
-          <span className="kicker">Research flow</span>
-          <h2>Research keeps moving while you work.</h2>
-          <p>Start a search, leave it running, and come back to qualified authors when they are ready.</p>
-        </div>
-        <div className="flow">
-          <span>Query</span><b>→</b><span>Queue</span><b>→</b><span>Workers</span><b>→</b><span>Verify</span><b>→</b><span>Ready</span>
-        </div>
+        <Metric label="Authors" value={counts.authors} />
+        <Metric label="Active Scouts" value={counts.jobs_queued} />
+        <Metric label="Ready Messages" value={counts.messages_ready} />
+        <Metric label="Sent" value={counts.messages_sent} />
       </div>
     </section>
   )
@@ -287,9 +239,9 @@ function Research({ keyValue, active }) {
     <section>
       <div className="page-head">
         <div>
-          <div className="eyebrow">Fast author discovery</div>
+          <div className="eyebrow">Discovery</div>
           <h1>Scout</h1>
-          <p>Set a market and a duration. Author Scout keeps discovering unique authors in the background while you use the rest of the app.</p>
+          <p>Find authors with strict filters. Long Scouts keep running in the background.</p>
         </div>
       </div>
 
@@ -298,7 +250,7 @@ function Research({ keyValue, active }) {
           <div className="filter-head">
             <div>
               <label>Scout filters</label>
-              <p>Country is a hard filter when provided. Name and genre are checked against discovery evidence before an author is claimed.</p>
+              <p>Country is strict. Other filters narrow discovery.</p>
             </div>
             <span className="strict-badge">Strict country</span>
           </div>
@@ -371,7 +323,7 @@ function Research({ keyValue, active }) {
                 <option value="10080">7 days</option>
               </select>
             </div>
-            <div className="compose-hint">Discovery only. The target ceiling is up to 300 unique authors/hour when the market has enough usable sources. Long Scouts continue in the background, and you can use the rest of Author Scout normally.</div>
+            <div className="compose-hint">Long Scouts continue in the background.</div>
             <button className="button button-primary" disabled={creating || !hasScoutCriteria}>
               {creating ? 'Starting…' : 'Start Scout'}
             </button>
@@ -385,7 +337,7 @@ function Research({ keyValue, active }) {
       <div className="research-layout">
         <div className="panel jobs-panel">
           <div className="panel-head"><div><span className="kicker">Live queue</span><h2>Scout jobs</h2></div><button className="button button-quiet" onClick={loadJobs}>Refresh</button></div>
-          {!jobs.length ? <Empty title="No scout jobs yet" body="Submit your first specific author search above." /> :
+          {!jobs.length ? <Empty title="No Scout jobs" body="Start one above." /> :
             <div className="job-list">
               {jobs.map(job => (
                 <button key={job.id} className={'job-row ' + (selected?.job?.id === job.id ? 'active' : '')} onClick={() => openJob(job.id)}>
@@ -403,7 +355,7 @@ function Research({ keyValue, active }) {
         </div>
 
         <div className="panel job-detail">
-          {!selected ? <Empty title="Select a Scout job" body="Open a job to watch live progress and inspect the unique authors it has claimed for you." /> : (
+          {!selected ? <Empty title="Select a Scout job" body="Open a job to see progress and results." /> : (
             <>
               <div className="panel-head">
                 <div><span className="kicker">Scout job #{selected.job.id}</span><h2>{short(selected.job.query_text, 78)}</h2></div>
@@ -419,14 +371,9 @@ function Research({ keyValue, active }) {
                 <Metric label="Saved" value={selected.job.accepted} />
                 <Metric label="Elapsed" value={formatDuration(selected.job.elapsed_seconds)} />
                 <Metric label="Remaining" value={formatDuration(selected.job.remaining_seconds)} />
-                <Metric label="Target pace" value={(selected.job.target_per_hour || 300) + '/hr'} />
               </div>
               <div className="progress-message">{selected.job.progress_text || 'Waiting for worker…'}</div>
               <div className="progress scout-time-progress"><i style={{width: Math.min(100, Math.max(0, Number(selected.job.progress_percent || 0))) + '%'}} /></div>
-              <div className="job-time-row">
-                <span>{Math.round(Number(selected.job.progress_percent || 0))}% of scheduled Scout time used</span>
-                <span>{selected.job.accepted || 0} authors already saved</span>
-              </div>
               {selected.job.error && <div className="alert alert-error">{selected.job.error}</div>}
               <div className="result-stack">
                 {(selected.results || []).map(author => (
@@ -457,8 +404,10 @@ function Authors({ keyValue, active }) {
   const [authors, setAuthors] = useState([])
   const [search, setSearch] = useState('')
   const [selectedSeed, setSelectedSeed] = useState(null)
+  const [busyId, setBusyId] = useState(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+
   const downloadAuthors = async () => {
     setError(''); setNotice('')
     try {
@@ -475,9 +424,10 @@ function Authors({ keyValue, active }) {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
-      setNotice('ChatGPT research pack downloaded. Upload it into ChatGPT to continue deep research and messaging.')
+      setNotice('Research pack downloaded.')
     } catch (e) { setError(e.message) }
   }
+
   const load = useCallback(async () => {
     try {
       const q = search.trim() ? '&search=' + encodeURIComponent(search.trim()) : ''
@@ -505,53 +455,66 @@ function Authors({ keyValue, active }) {
     try {
       await navigator.clipboard.writeText(researchSeedText(a))
       setNotice('Research seed copied.')
-    } catch {
-      setError('Could not copy the research seed.')
-    }
+    } catch { setError('Could not copy the research seed.') }
+  }
+
+  const openMessage = async (author) => {
+    if (!author.message_id) return
+    const popup = window.open('about:blank', '_blank')
+    if (popup) popup.opener = null
+    setBusyId(author.id); setError(''); setNotice('')
+    try {
+      const d = await request('/api/v1/messages/' + author.message_id + '/compose-link', keyValue)
+      if (!popup) throw new Error('Your browser blocked the Gmail tab. Allow pop-ups for Author Scout and try again.')
+      popup.location.replace(d.url)
+      setNotice('Gmail opened in a new tab. Author Scout will stay here.')
+    } catch (e) {
+      if (popup) popup.close()
+      setError(e.message)
+    } finally { setBusyId(null) }
   }
 
   return (
     <section>
       <div className="page-head">
-        <div><div className="eyebrow">My author library</div><h1>My Authors</h1><p>Authors exclusively claimed to your Author Scout account.</p></div>
+        <div><div className="eyebrow">Library</div><h1>My Authors</h1></div>
         <div className="page-head-actions">
           <input className="search-box" placeholder="Search authors…" value={search} onChange={e => setSearch(e.target.value)} />
           <button className="button button-primary" onClick={downloadAuthors}>Download for ChatGPT</button>
         </div>
       </div>
-      <div className="chatgpt-handoff-strip">
-        <div>
-          <strong>Continue research in ChatGPT</strong>
-          <span>Download the research pack, upload it into ChatGPT, then ask ChatGPT to research the authors and create their first messages. The workbook already contains the Research Seeds, sources and instructions.</span>
-        </div>
-      </div>
       {notice && <div className="alert alert-success">{notice}</div>}
-      {error && <div className="alert alert-error">{error}</div>
+      {error && <div className="alert alert-error">{error}</div>}
+
       <div className="panel table-panel">
-        {!authors.length ? <Empty title="No matching authors" body="Run a Scout job to start building your author library." /> :
+        {!authors.length ? <Empty title="No authors" body="Run a Scout to start your library." /> :
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Author</th><th>Country</th><th>Genre</th><th>Source</th><th>Public email</th><th>Website</th><th>Activity</th></tr></thead>
+            <thead><tr><th>Author</th><th>Country</th><th>Genre</th><th>Source</th><th>Email</th><th>Message</th></tr></thead>
             <tbody>
               {authors.map(a => <tr key={a.id}>
                 <td>
                   <strong>{a.name}</strong>
-                  <small>#{a.id}{a.discovery_confidence ? ' · ' + a.discovery_confidence + '% identity confidence' : ''}</small>
-                  <div className="author-row-actions">
-                    <button className="seed-link" onClick={() => setSelectedSeed(a)}>Research Seed</button>
-                  </div>
+                  <small>#{a.id}{a.discovery_confidence ? ' · ' + a.discovery_confidence + '% confidence' : ''}</small>
+                  <button className="seed-link" onClick={() => setSelectedSeed(a)}>Research Seed</button>
                 </td>
                 <td>{a.country || '—'}</td>
                 <td>{a.genre || '—'}</td>
                 <td>
                   {a.discovery_source_url
-                    ? <a target="_blank" rel="noreferrer" href={a.discovery_source_url}>{a.discovery_platform || a.discovery_source_type || 'Open source'} ↗</a>
-                    : (a.discovery_platform || a.discovery_source_type || '—')}
-                  {a.discovery_source_type && <small>{a.discovery_source_type.replaceAll('_',' ')}</small>}
+                    ? <a target="_blank" rel="noreferrer" href={a.discovery_source_url}>{a.discovery_platform || 'Source'} ↗</a>
+                    : '—'}
                 </td>
-                <td>{a.email ? <a href={'mailto:' + a.email}>{a.email}</a> : '—'}</td>
-                <td>{a.website ? <a target="_blank" rel="noreferrer" href={a.website}>Open ↗</a> : '—'}</td>
-                <td title={a.recent_activity}>{short(a.recent_activity, 90) || '—'}</td>
+                <td>{a.email || a.message_recipient || '—'}</td>
+                <td className="message-action-cell">
+                  {a.message_status === 'ready' && a.message_id
+                    ? <button className="button button-good button-compact" disabled={busyId === a.id} onClick={() => openMessage(a)}>
+                        {busyId === a.id ? 'Opening…' : 'Message ↗'}
+                      </button>
+                    : a.message_status === 'sent'
+                      ? <Status value={a.message_reply_status === 'replied' ? 'replied' : 'sent'} />
+                      : '—'}
+                </td>
               </tr>)}
             </tbody>
           </table>
@@ -560,32 +523,22 @@ function Authors({ keyValue, active }) {
 
       {selectedSeed && <div className="panel research-seed-panel">
         <div className="panel-head">
-          <div>
-            <span className="kicker">Fast Scout handoff</span>
-            <h2>{selectedSeed.name}</h2>
-            <p className="muted">This is the lightweight evidence pack saved during discovery. Deep research should start from this evidence rather than rediscovering the author from zero.</p>
-          </div>
+          <div><span className="kicker">Research Seed</span><h2>{selectedSeed.name}</h2></div>
           <button className="button button-quiet" onClick={() => setSelectedSeed(null)}>Close</button>
         </div>
         <div className="seed-grid">
-          <div><span>Country / market</span><strong>{selectedSeed.country || 'Not established yet'}</strong></div>
-          <div><span>Genre / category</span><strong>{selectedSeed.genre || 'Not established yet'}</strong></div>
-          <div><span>Platform</span><strong>{selectedSeed.discovery_platform || 'Unknown'}</strong></div>
+          <div><span>Country</span><strong>{selectedSeed.country || '—'}</strong></div>
+          <div><span>Genre</span><strong>{selectedSeed.genre || '—'}</strong></div>
+          <div><span>Platform</span><strong>{selectedSeed.discovery_platform || '—'}</strong></div>
           <div><span>Source type</span><strong>{(selectedSeed.discovery_source_type || 'web search').replaceAll('_',' ')}</strong></div>
-          <div><span>Identity confidence</span><strong>{selectedSeed.discovery_confidence || 0}/100</strong></div>
+          <div><span>Confidence</span><strong>{selectedSeed.discovery_confidence || 0}/100</strong></div>
           <div><span>Claimed</span><strong>{fmt(selectedSeed.claimed_at)}</strong></div>
         </div>
-        <div className="seed-field">
-          <span>Discovery query</span>
-          <p>{selectedSeed.discovery_query || 'No query recorded.'}</p>
-        </div>
-        <div className="seed-field">
-          <span>Discovery evidence</span>
-          <p>{selectedSeed.discovery_evidence || 'No source snippet was available.'}</p>
-        </div>
+        <div className="seed-field"><span>Query</span><p>{selectedSeed.discovery_query || '—'}</p></div>
+        <div className="seed-field"><span>Evidence</span><p>{selectedSeed.discovery_evidence || '—'}</p></div>
         <div className="seed-actions">
-          {selectedSeed.discovery_source_url && <a className="button button-quiet" target="_blank" rel="noreferrer" href={selectedSeed.discovery_source_url}>Open original source ↗</a>}
-          <button className="button button-primary" onClick={() => copySeed(selectedSeed)}>Copy Research Seed</button>
+          {selectedSeed.discovery_source_url && <a className="button button-quiet" target="_blank" rel="noreferrer" href={selectedSeed.discovery_source_url}>Open source ↗</a>}
+          <button className="button button-primary" onClick={() => copySeed(selectedSeed)}>Copy Seed</button>
         </div>
       </div>}
     </section>
@@ -600,6 +553,7 @@ function Messages({ keyValue, active }) {
   const [selected, setSelected] = useState(null)
   const [gmail, setGmail] = useState({ connected: false, accounts: [] })
   const [busyId, setBusyId] = useState(null)
+  const [importing, setImporting] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
@@ -622,16 +576,42 @@ function Messages({ keyValue, active }) {
     const t = setTimeout(load, 250)
     return () => clearTimeout(t)
   }, [load, active])
-
   usePolling(load, 9000, active)
 
+  const importResults = async (file) => {
+    if (!file) return
+    setImporting(true); setError(''); setNotice('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(API_BASE + '/api/v1/messages/import', {
+        method: 'POST',
+        headers: { 'X-Author-Scout-Key': keyValue },
+        body: form
+      })
+      let d = {}
+      try { d = await res.json() } catch {}
+      if (!res.ok) throw new Error(d.detail || 'Could not import this file')
+      setStatus('ready')
+      setNotice('Imported ' + (d.ready || 0) + ' ready messages. ' + (d.unmatched || 0) + ' unmatched, ' + (d.skipped || 0) + ' skipped.')
+      await load()
+    } catch (e) { setError(e.message) }
+    finally { setImporting(false) }
+  }
+
   const openGmail = async (id) => {
+    const popup = window.open('about:blank', '_blank')
+    if (popup) popup.opener = null
     setBusyId(id); setError(''); setNotice('')
     try {
       const d = await request('/api/v1/messages/' + id + '/compose-link', keyValue)
-      window.open(d.url, '_blank', 'noopener,noreferrer')
-    } catch (e) { setError(e.message) }
-    finally { setBusyId(null) }
+      if (!popup) throw new Error('Your browser blocked the Gmail tab. Allow pop-ups for Author Scout and try again.')
+      popup.location.replace(d.url)
+      setNotice('Gmail opened in a new tab. Author Scout will stay here.')
+    } catch (e) {
+      if (popup) popup.close()
+      setError(e.message)
+    } finally { setBusyId(null) }
   }
 
   const updateStatus = async (id, next) => {
@@ -641,14 +621,14 @@ function Messages({ keyValue, active }) {
         method: 'POST',
         body: JSON.stringify({ status: next })
       })
-      setNotice(next === 'replied' ? 'Message marked as replied.' : next === 'sent' ? 'Message marked as sent.' : 'Message moved back to ready.')
+      setNotice(next === 'replied' ? 'Marked replied.' : next === 'sent' ? 'Marked sent.' : 'Moved to Ready.')
       setSelected(null)
       await load()
     } catch (e) { setError(e.message) }
     finally { setBusyId(null) }
   }
 
-  const autoSend = async (id) => {
+  const sendNow = async (id) => {
     if (!window.confirm('Send this message now through your connected Gmail account?')) return
     setBusyId(id); setError(''); setNotice('')
     try {
@@ -656,7 +636,7 @@ function Messages({ keyValue, active }) {
         method: 'POST',
         body: JSON.stringify({})
       })
-      setNotice('Sent through ' + (d.sender_email || 'your connected Gmail') + '.')
+      setNotice('Sent through ' + (d.sender_email || 'Gmail') + '.')
       setSelected(null)
       await load()
     } catch (e) { setError(e.message) }
@@ -666,22 +646,24 @@ function Messages({ keyValue, active }) {
   const copyText = async (m) => {
     try {
       await navigator.clipboard.writeText((m.subject ? 'Subject: ' + m.subject + '\n\n' : '') + (m.body || ''))
-      setNotice('Subject and message copied.')
-    } catch {
-      setError('Copy failed. Select the message text manually.')
-    }
+      setNotice('Message copied.')
+    } catch { setError('Copy failed.') }
   }
 
   return (
     <section>
       <div className="page-head">
-        <div>
-          <div className="eyebrow">Author outreach</div>
-          <h1>Messages</h1>
-          <p>Review approved outreach, open it in Gmail, send through your connected account, and track replies.</p>
-        </div>
+        <div><div className="eyebrow">Outreach</div><h1>Messages</h1></div>
         <div className="message-toolbar">
-          <input className="search-box" placeholder="Search author, email or subject…" value={search} onChange={e => setSearch(e.target.value)} />
+          <label className={'button button-quiet file-button ' + (importing ? 'disabled' : '')}>
+            {importing ? 'Importing…' : 'Import ChatGPT Results'}
+            <input hidden disabled={importing} type="file" accept=".xlsx,.xlsm,.csv" onChange={e => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              importResults(file)
+            }} />
+          </label>
+          <input className="search-box" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} />
           <select className="select" value={status} onChange={e => { setStatus(e.target.value); setSelected(null) }}>
             <option value="ready">Ready</option>
             <option value="sent">Sent</option>
@@ -693,29 +675,29 @@ function Messages({ keyValue, active }) {
 
       <div className={'alert ' + (gmail.connected ? 'alert-success' : 'alert-error')}>
         {gmail.connected
-          ? 'Gmail connected: ' + (gmail.accounts || []).map(a => a.email).join(', ') + '. Auto Send is available.'
-          : 'Gmail Auto Send is locked. In Telegram, use /gmail to connect an account. You can still use Open Gmail and Mark Sent.'}
+          ? 'Gmail connected: ' + (gmail.accounts || []).map(a => a.email).join(', ')
+          : 'Connect Gmail with /gmail in Telegram to enable direct sending.'}
       </div>
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
       <div className="panel table-panel">
-        {!items.length ? <Empty title={'No ' + status + ' messages'} body={status === 'ready' ? 'Import a completed outreach workbook in Telegram. Ready messages will appear here automatically.' : 'No messages match this view yet.'} /> :
+        {!items.length ? <Empty title={'No ' + status + ' messages'} body={status === 'ready' ? 'Import the finished ChatGPT workbook to add messages.' : 'No messages in this view.'} /> :
         <div className="table-wrap">
           <table>
             <thead><tr><th>Author</th><th>Recipient</th><th>Subject</th><th>Status</th><th>Sent</th><th>Actions</th></tr></thead>
             <tbody>
               {items.map(m => <tr key={m.id}>
                 <td><strong>{m.author_name}</strong><small>{[m.author_country, m.author_genre].filter(Boolean).join(' · ') || '#' + m.id}</small></td>
-                <td>{m.recipient ? <a href={'mailto:' + m.recipient}>{m.recipient}</a> : '—'}</td>
+                <td>{m.recipient || '—'}</td>
                 <td title={m.subject}>{short(m.subject, 72) || '—'}</td>
                 <td><Status value={m.reply_status === 'replied' ? 'replied' : m.status} /></td>
                 <td>{fmt(m.sent_at)}</td>
                 <td>
                   <div className="inline-actions">
                     <button className="button button-quiet" onClick={() => setSelected(m)}>Review</button>
-                    {m.status !== 'sent' && <button className="button button-quiet" disabled={busyId === m.id} onClick={() => openGmail(m.id)}>Open Gmail</button>}
-                    {m.status !== 'sent' && gmail.connected && <button className="button button-good" disabled={busyId === m.id} onClick={() => autoSend(m.id)}>Auto Send</button>}
+                    {m.status !== 'sent' && <button className="button button-primary" disabled={busyId === m.id} onClick={() => openGmail(m.id)}>Message ↗</button>}
+                    {m.status !== 'sent' && gmail.connected && <button className="button button-good" disabled={busyId === m.id} onClick={() => sendNow(m.id)}>Send now</button>}
                     {m.status !== 'sent' && <button className="button button-quiet" disabled={busyId === m.id} onClick={() => updateStatus(m.id, 'sent')}>Mark Sent</button>}
                     {m.status === 'sent' && m.reply_status !== 'replied' && <button className="button button-good" disabled={busyId === m.id} onClick={() => updateStatus(m.id, 'replied')}>Mark Replied</button>}
                   </div>
@@ -742,8 +724,8 @@ function Messages({ keyValue, active }) {
         </>}
         <div className="connection-actions">
           <button className="button button-quiet" onClick={() => copyText(selected)}>Copy</button>
-          {selected.status !== 'sent' && <button className="button button-quiet" disabled={busyId === selected.id} onClick={() => openGmail(selected.id)}>Open Gmail</button>}
-          {selected.status !== 'sent' && gmail.connected && <button className="button button-good" disabled={busyId === selected.id} onClick={() => autoSend(selected.id)}>Auto Send</button>}
+          {selected.status !== 'sent' && <button className="button button-primary" disabled={busyId === selected.id} onClick={() => openGmail(selected.id)}>Message ↗</button>}
+          {selected.status !== 'sent' && gmail.connected && <button className="button button-good" disabled={busyId === selected.id} onClick={() => sendNow(selected.id)}>Send now</button>}
           {selected.status !== 'sent' && <button className="button button-quiet" disabled={busyId === selected.id} onClick={() => updateStatus(selected.id, 'sent')}>Mark Sent</button>}
           {selected.status === 'sent' && selected.reply_status !== 'replied' && <button className="button button-good" disabled={busyId === selected.id} onClick={() => updateStatus(selected.id, 'replied')}>Mark Replied</button>}
           {selected.status === 'sent' && <button className="button button-danger-quiet" disabled={busyId === selected.id} onClick={() => updateStatus(selected.id, 'ready')}>Move to Ready</button>}
@@ -776,7 +758,7 @@ function Connections({ keyValue, active }) {
       await request('/api/v1/connections/setup', keyValue, {
         method:'POST', body: JSON.stringify({ linkedin_url: linkedin.trim(), focus: focus.trim() })
       })
-      setNotice('Connection Intelligence is active. Background research will begin filling your queue.')
+      setNotice('Connection targeting updated.')
       setLinkedin('')
       await load()
     } catch (e) { setError(e.message) }
@@ -795,7 +777,7 @@ function Connections({ keyValue, active }) {
   return (
     <section>
       <div className="page-head">
-        <div><div className="eyebrow">LinkedIn network intelligence</div><h1>Connections</h1><p>Background-researched profiles, scored before they enter your queue.</p></div>
+        <div><div className="eyebrow">LinkedIn</div><h1>Connections</h1></div>
         <select className="select" value={status} onChange={e => setStatus(e.target.value)}>
           <option value="ready">Ready / saved</option>
           <option value="connected">Connected</option>
@@ -805,7 +787,7 @@ function Connections({ keyValue, active }) {
       </div>
 
       <div className="panel connection-setup">
-        <div><span className="kicker">Set your targeting profile</span><h2>Connection Intelligence setup</h2><p>Public location evidence in Nigeria is excluded by default. The system does not infer nationality from names or photos.</p></div>
+        <div><span className="kicker">Targeting</span><h2>Connection setup</h2></div>
         <form onSubmit={setup}>
           <input placeholder="https://www.linkedin.com/in/your-profile" value={linkedin} onChange={e => setLinkedin(e.target.value)} />
           <input placeholder="Optional focus: publishing founders, authors, literary agents…" value={focus} onChange={e => setFocus(e.target.value)} />
@@ -815,7 +797,7 @@ function Connections({ keyValue, active }) {
       {notice && <div className="alert alert-success">{notice}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
-      {!items.length ? <div className="panel"><Empty title={status === 'ready' ? 'No ready profiles yet' : 'Nothing in this status'} body={status === 'ready' ? 'Once Connection Intelligence is configured, Render keeps researching and replenishing this queue in the background.' : 'Profiles will appear here as their status changes.'} /></div> :
+      {!items.length ? <div className="panel"><Empty title={status === 'ready' ? 'No ready profiles yet' : 'Nothing in this status'} body={status === 'ready' ? 'Connection profiles will appear here as they are found.' : 'No profiles in this status.'} /></div> :
       <div className="connection-grid">
         {items.map(p => (
           <div className="connection-card" key={p.assignment_id}>
@@ -841,55 +823,12 @@ function Connections({ keyValue, active }) {
   )
 }
 
-function System({ keyValue, active }) {
-  const [source, setSource] = useState(null)
-  const [health, setHealth] = useState(null)
-  const [error, setError] = useState('')
-  const load = useCallback(async () => {
-    try {
-      const [a,b] = await Promise.all([
-        request('/api/v1/source-status', keyValue),
-        request('/api/v1/health', '')
-      ])
-      setSource(a); setHealth(b); setError('')
-    } catch(e){ setError(e.message) }
-  }, [keyValue])
-  usePolling(load, 10000, active)
-
-  return (
-    <section>
-      <div className="page-head">
-        <div><div className="eyebrow">Infrastructure</div><h1>System</h1><p>What the background Scout engine is doing.</p></div>
-        <button className="button button-quiet" onClick={load}>Refresh</button>
-      </div>
-      {error && <div className="alert alert-error">{error}</div>}
-      <div className="metric-grid">
-        <Metric label="API" value={health?.ok ? 'Online' : 'Checking'} sub={'v' + (health?.version || '…')} />
-        <Metric label="Active demands" value={source?.demands || 0} sub="Created by real Scout queries" />
-        <Metric label="Indexed sources" value={source?.sources || 0} sub="Reusable source pages" />
-        <Metric label="Author reservoir" value={source?.candidates || source?.verified || 0} sub="Discovery candidates available" />
-      </div>
-      <div className="panel">
-        <span className="kicker">Current workflow</span>
-        <h2>Scout here. Deep-research in ChatGPT with the downloadable research pack.</h2>
-        <div className="architecture">
-          <div><strong>Author Scout</strong><span>Discover + claim authors</span></div><b>→</b>
-          <div><strong>Excel Research Pack</strong><span>Research Seeds + sources</span></div><b>→</b>
-          <div><strong>ChatGPT</strong><span>Deep research + messages</span></div>
-        </div>
-        <p className="muted">This workflow needs no OpenAI API key and no plugin approval. Telegram remains an optional companion for Scout notifications, author status and quick access.</p>
-      </div>
-    </section>
-  )
-}
-
 const NAV = [
   ['dashboard','Overview','⌂'],
   ['research','Scout','⌕'],
   ['authors','Authors','A'],
   ['messages','Messages','✉'],
   ['connections','Connections','↗'],
-  ['system','System','⚙'],
 ]
 
 function AppCore() {
@@ -922,7 +861,7 @@ function AppCore() {
 
   if (!session) return <Login onLogin={verify} busy={checking} error={loginError} />
 
-  const displayName = session.user?.first_name || session.user?.username || 'Team member'
+  const displayName = session.user?.first_name || session.user?.username || 'User'
   const initials = String(displayName || 'AS').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase()
 
   return (
@@ -941,8 +880,8 @@ function AppCore() {
 
           <div className="top-actions">
             <div className="workspace-summary">
-              <span>{session.team?.name || 'Workspace'}</span>
-              <small>{displayName}</small>
+              <span>{displayName}</span>
+              <small>Author Scout</small>
             </div>
             <button className="avatar-button" onClick={logout} title="Sign out">{initials}</button>
           </div>
@@ -970,9 +909,6 @@ function AppCore() {
           </div>
           <div className={tab === 'connections' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'connections'}>
             <Connections keyValue={keyValue} active={tab === 'connections'} />
-          </div>
-          <div className={tab === 'system' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'system'}>
-            <System keyValue={keyValue} active={tab === 'system'} />
           </div>
         </main>
       </div>
