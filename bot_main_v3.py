@@ -9,11 +9,11 @@ import re
 import time
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlencode, urlparse, urlunparse
 
 import bot_main as legacy
 from sqlalchemy import text
-from fastapi import Response
+from fastapi import File, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 app = legacy.app
@@ -1970,15 +1970,28 @@ async def web_authors_export_xlsx(request: legacy.Request):
 
 @app.get("/api/v1/authors")
 async def web_authors(request: legacy.Request, limit: int=100, search: str=""):
-    ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0)
+    ctx=_web_auth(request);_auth_team(ctx);uid=int(ctx.get("uid") or 0)
     limit=max(1,min(500,int(limit)))
+    params={"u":uid,"n":limit}
+    search_sql=""
     if search.strip():
-        term="%"+search.strip().lower()+"%"
-        rs=legacy.rows("""SELECT * FROM prospects WHERE claimed_by_user_id=:u AND
-            (lower(name) LIKE :q OR lower(country) LIKE :q OR lower(genre) LIKE :q OR lower(email) LIKE :q)
-            ORDER BY id DESC LIMIT :n""",u=uid,q=term,n=limit)
-    else:
-        rs=legacy.rows("SELECT * FROM prospects WHERE claimed_by_user_id=:u ORDER BY id DESC LIMIT :n",u=uid,n=limit)
+        params["q"]="%"+search.strip().lower()+"%"
+        search_sql=""" AND (lower(p.name) LIKE :q OR lower(p.country) LIKE :q OR
+            lower(p.genre) LIKE :q OR lower(p.email) LIKE :q)"""
+    rs=legacy.rows(f"""SELECT p.*,
+        m.id AS message_id,m.status AS message_status,m.reply_status AS message_reply_status,
+        m.subject AS message_subject,m.body AS message_body,m.body_english AS message_body_english,
+        COALESCE(NULLIF(m.recipient_email,''),p.email) AS message_recipient
+        FROM prospects p
+        LEFT JOIN LATERAL (
+            SELECT id,status,reply_status,subject,body,body_english,recipient_email
+            FROM messages
+            WHERE prospect_id=p.id
+            ORDER BY CASE WHEN status='ready' THEN 0 ELSE 1 END,id DESC
+            LIMIT 1
+        ) m ON TRUE
+        WHERE p.claimed_by_user_id=:u{search_sql}
+        ORDER BY p.id DESC LIMIT :n""",**params)
     return {"ok":True,"authors":rs}
 
 
@@ -1991,6 +2004,118 @@ def _web_message(message_id: int, user_id: int):
         COALESCE(NULLIF(m.recipient_email,''),p.email) AS recipient
         FROM messages m JOIN prospects p ON p.id=m.prospect_id
         WHERE m.id=:i AND p.claimed_by_user_id=:u""",i=message_id,u=user_id)
+
+@app.post("/api/v1/messages/import")
+async def web_import_chatgpt_results(request: legacy.Request, file: UploadFile=File(...)):
+    ctx=_web_auth(request);team=_auth_team(ctx);uid=int(ctx.get("uid") or 0);tid=int(team["id"])
+    name=(file.filename or "results.xlsx").lower()
+    if not (name.endswith(".xlsx") or name.endswith(".xlsm") or name.endswith(".csv")):
+        raise legacy.HTTPException(status_code=400,detail="Upload an XLSX, XLSM, or CSV file")
+    data=await file.read()
+    if len(data)>15*1024*1024:
+        raise legacy.HTTPException(status_code=400,detail="File is too large. Keep the research file under 15 MB.")
+    if name.endswith(".csv"):
+        table=list(csv.reader(io.StringIO(data.decode("utf-8-sig"))))
+    else:
+        try:
+            book=legacy.load_workbook(io.BytesIO(data),read_only=True,data_only=True)
+        except Exception:
+            raise legacy.HTTPException(status_code=400,detail="Could not read this workbook")
+        table=[]
+        preferred=["Authors & Messages","My Authors","Authors"]
+        sheets=[book[s] for s in preferred if s in book.sheetnames] + [s for s in book.worksheets if s.title not in preferred]
+        for sh in sheets:
+            candidate=[list(x) for x in sh.iter_rows(values_only=True)]
+            if not candidate:continue
+            headers={legacy.norm_header(x) for x in candidate[0]}
+            subject_names={legacy.norm_header(x) for x in ["Selected Subject","Subject","Subject Line","Subject Option 1"]}
+            body_names={legacy.norm_header(x) for x in ["Best First Message — Author Language","First Message","Message","Body","Email Body"]}
+            if headers.intersection(subject_names) and headers.intersection(body_names):
+                table=candidate
+                break
+        if not table and book.worksheets:
+            table=[list(x) for x in book.worksheets[0].iter_rows(values_only=True)]
+    if not table:
+        raise legacy.HTTPException(status_code=400,detail="The uploaded file is empty")
+
+    h=[legacy.norm_header(x) for x in table[0]]
+    def ix(names):
+        wanted={legacy.norm_header(n) for n in names}
+        for i,n in enumerate(h):
+            if n in wanted:return i
+        return None
+
+    iid=ix(["Author Scout ID","Canonical Author ID","Source Row ID"])
+    ia=ix(["Author Name — Verified","Author","Author Name","Name","Author Name — Bot"])
+    ie=ix(["Public Professional Email","Verified Public Email","Email","Author Email","Public Professional Email — Bot"])
+    iw=ix(["Official Website","Verified Official Website","Website"])
+    ies=ix(["Email Source URL"])
+    icountry=ix(["Country Verified","Country","Country / Market"])
+    igenre=ix(["Genre","Genre / Category"])
+    ist=ix(["Processing Status","Research Status","Status"])
+    isub=ix(["Selected Subject","Subject","Subject Line","Subject Option 1"])
+    ib=ix(["Best First Message — Author Language","First Message","Message","Body","Email Body"])
+    ibe=ix(["Best First Message — English","English Version"])
+    ibio=ix(["Research Summary","Verified Research Summary","Bio"])
+    iact=ix(["Recent Activity / Current Moment","Recent Activity","Current Moment"])
+
+    if isub is None or ib is None:
+        raise legacy.HTTPException(status_code=400,detail="The file needs Selected Subject and Best First Message — Author Language columns")
+
+    ps=legacy.rows("SELECT * FROM prospects WHERE claimed_by_user_id=:u",u=uid)
+    byid={f"as-{p['id']}":p for p in ps}
+    bn={(p.get("name") or "").strip().lower():p for p in ps if (p.get("name") or "").strip()}
+    be={(p.get("email") or "").strip().lower():p for p in ps if (p.get("email") or "").strip()}
+
+    matched=ready=skipped=unmatched=0
+    for rr in table[1:]:
+        g=lambda i:str(rr[i] or "").strip() if i is not None and i<len(rr) else ""
+        p=None
+        if iid is not None:
+            p=byid.get(g(iid).lower())
+        if not p and ie is not None and g(ie):
+            p=be.get(g(ie).lower())
+        if not p and ia is not None and g(ia):
+            p=bn.get(g(ia).lower())
+        if not p:
+            unmatched+=1;continue
+
+        subject=g(isub);body=g(ib);english=g(ibe)
+        status=g(ist).upper() if ist is not None else ""
+        if not subject or not body or (status and status not in {"COMPLETED","READY","READY FOR OUTREACH"}):
+            skipped+=1;continue
+
+        recipient=(g(ie) or p.get("email") or "").strip().lower()
+        website=g(iw);email_source=g(ies);country=g(icountry);genre=g(igenre);bio=g(ibio);activity=g(iact)
+        legacy.execq("""UPDATE prospects SET
+            website=CASE WHEN :w<>'' THEN :w ELSE website END,
+            email=CASE WHEN :e<>'' THEN :e ELSE email END,
+            email_source_url=CASE WHEN :es<>'' THEN :es ELSE email_source_url END,
+            country=CASE WHEN :c<>'' THEN :c ELSE country END,
+            genre=CASE WHEN :g<>'' THEN :g ELSE genre END,
+            bio=CASE WHEN :b<>'' THEN :b ELSE bio END,
+            recent_activity=CASE WHEN :a<>'' THEN :a ELSE recent_activity END,
+            updated_at=:d
+            WHERE id=:p AND claimed_by_user_id=:u""",
+            w=website,e=recipient,es=email_source,c=country,g=genre,b=bio,a=activity,
+            d=legacy.iso(),p=p["id"],u=uid)
+
+        ex=legacy.row("""SELECT id,status FROM messages
+            WHERE prospect_id=:p AND imported_by_user_id=:u ORDER BY id DESC LIMIT 1""",p=p["id"],u=uid)
+        now_iso=legacy.iso()
+        if ex:
+            legacy.execq("""UPDATE messages SET subject=:s,body=:b,body_english=:be,recipient_email=:re,
+                status=CASE WHEN status='sent' THEN status ELSE 'ready' END,updated_at=:d
+                WHERE id=:i""",s=subject,b=body,be=english,re=recipient,d=now_iso,i=ex["id"])
+        else:
+            legacy.execq("""INSERT INTO messages(team_id,prospect_id,imported_by_user_id,subject,body,body_english,
+                recipient_email,status,created_at,updated_at)
+                VALUES(:t,:p,:u,:s,:b,:be,:re,'ready',:d,:d)""",
+                t=tid,p=p["id"],u=uid,s=subject,b=body,be=english,re=recipient,d=now_iso)
+        matched+=1;ready+=1
+
+    return {"ok":True,"matched":matched,"ready":ready,"skipped":skipped,"unmatched":unmatched}
+
 
 @app.get("/api/v1/messages")
 async def web_messages(request: legacy.Request, status: str="ready", limit: int=100, search: str=""):
@@ -2028,15 +2153,19 @@ async def web_messages(request: legacy.Request, status: str="ready", limit: int=
 
 @app.get("/api/v1/messages/{message_id}/compose-link")
 async def web_message_compose_link(request: legacy.Request, message_id: int):
-    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    ctx=_web_auth(request);team=_auth_team(ctx)
     uid=_web_actor_uid(ctx,team)
     m=_web_message(message_id,uid)
     if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
-    if not (m.get("recipient") or "").strip():
+    recipient=(m.get("recipient") or "").strip()
+    if not recipient:
         raise legacy.HTTPException(status_code=400,detail="This message has no recipient email")
-    token=legacy.serializer.dumps({"uid":uid,"mid":int(message_id)})
-    base=legacy.BASE or "https://author-scout-team-bot.onrender.com"
-    return {"ok":True,"url":base.rstrip("/")+"/compose?t="+token}
+    params={
+        "view":"cm","fs":"1","to":recipient,
+        "su":(m.get("subject") or "").strip(),
+        "body":(m.get("body") or "").strip()
+    }
+    return {"ok":True,"url":"https://mail.google.com/mail/?"+urlencode(params)}
 
 @app.post("/api/v1/messages/{message_id}/status")
 async def web_message_status(request: legacy.Request, message_id: int):
