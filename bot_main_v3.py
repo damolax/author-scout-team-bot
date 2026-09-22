@@ -351,6 +351,30 @@ def init_connection_db() -> None:
         "CREATE INDEX IF NOT EXISTS idx_author_pool_country_status ON author_candidate_pool(country,status)",
         "CREATE INDEX IF NOT EXISTS idx_author_pool_status_seen ON author_candidate_pool(status,last_seen_at)",
         "CREATE INDEX IF NOT EXISTS idx_author_sources_country ON author_source_registry(country,status)",
+        f"""CREATE TABLE IF NOT EXISTS web_accounts(
+            id {pk},
+            google_subject TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL UNIQUE,
+            display_name TEXT DEFAULT '',
+            app_user_id BIGINT NOT NULL UNIQUE,
+            team_id INTEGER NOT NULL,
+            telegram_user_id BIGINT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS web_telegram_links(
+            id {pk},
+            code TEXT NOT NULL UNIQUE,
+            web_account_id INTEGER NOT NULL,
+            app_user_id BIGINT NOT NULL,
+            team_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            used_at TEXT DEFAULT ''
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_web_accounts_team ON web_accounts(team_id)",
+        "CREATE INDEX IF NOT EXISTS idx_web_links_status ON web_telegram_links(status,expires_at)",
         f"""CREATE TABLE IF NOT EXISTS web_research_jobs(
             id {pk},
             team_id INTEGER NOT NULL,
