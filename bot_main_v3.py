@@ -1632,6 +1632,41 @@ async def handle_web_google_callback(code: str, state: str, error: str=""):
     token=_issue_web_session(account)
     return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?session="+urlencode({"s":token})[2:])
 
+
+def _neon_auth_session(session_token: str) -> dict | None:
+    token=(session_token or "").strip()
+    if not token:return None
+    return legacy.row("""SELECT s.token,s."expiresAt" expires_at,
+        u.id::text user_id,u.email,u.name,u."emailVerified" email_verified
+        FROM neon_auth.session s
+        JOIN neon_auth."user" u ON u.id=s."userId"
+        WHERE s.token=:token AND s."expiresAt">NOW()
+        LIMIT 1""",token=token)
+
+@app.post("/api/v1/auth/neon-session")
+async def web_neon_session(request: legacy.Request):
+    body=await request.json()
+    token=str(body.get("session_token") or "").strip()
+    auth_session=await asyncio.to_thread(_neon_auth_session,token)
+    if not auth_session:
+        raise legacy.HTTPException(status_code=401,detail="Your sign-in session is invalid or expired")
+    profile={
+        "sub":"neon:"+str(auth_session["user_id"]),
+        "email":auth_session["email"],
+        "name":auth_session.get("name") or str(auth_session["email"]).split("@")[0],
+    }
+    account=await asyncio.to_thread(_get_or_create_web_account,profile)
+    app_session=_issue_web_session(account)
+    return {
+        "ok":True,
+        "session":app_session,
+        "email":account["email"],
+        "display_name":account.get("display_name") or "",
+        "email_verified":bool(auth_session.get("email_verified")),
+        "verification_required":False,
+        "telegram_linked":bool(account.get("telegram_user_id")),
+    }
+
 @app.get("/auth/google/start")
 async def web_google_start():
     if not all([legacy.GOOGLE_CLIENT_ID,legacy.GOOGLE_CLIENT_SECRET,legacy.GOOGLE_REDIRECT_URI]):
