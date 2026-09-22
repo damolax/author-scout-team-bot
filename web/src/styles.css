@@ -379,3 +379,21 @@ tbody tr:hover{background:#fff9d9}
 @media(max-width:860px){
   .message-toolbar .button,.message-toolbar .search-box,.message-toolbar .select{width:100%}
 }
+
+
+.google-login{margin-top:8px;gap:10px}
+.google-g{width:22px;height:22px;border-radius:50%;background:#fff;color:#222;display:inline-grid;place-items:center;font-weight:800;font-size:13px}
+.login-note{font-size:11px;color:#7d8797;text-align:center;margin:12px 0 18px}
+.legacy-toggle{width:100%;border:0;background:transparent;color:#767f8d;font-size:11px;padding:8px;text-decoration:underline;text-underline-offset:3px}
+.legacy-login{margin-top:10px;padding-top:14px;border-top:1px solid rgba(30,34,40,.12)}
+.legacy-login .button{margin-top:10px}
+.telegram-link-card{margin-top:18px;display:flex;align-items:center;justify-content:space-between;gap:22px}
+.telegram-link-card h2{margin:5px 0 6px}
+.telegram-link-card p{margin:0;color:#7d8794;font-size:12px;line-height:1.55;max-width:680px}
+.telegram-link-code{display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:flex-end}
+.telegram-link-code span{font-size:10px;color:#7d8794}
+.telegram-link-code code{padding:9px 11px;border-radius:8px;background:rgba(245,231,174,.5);border:1px solid rgba(187,151,48,.25);color:#4d3e0e;font-weight:700}
+@media(max-width:700px){
+  .telegram-link-card{align-items:flex-start;flex-direction:column}
+  .telegram-link-code{justify-content:flex-start}
+}
