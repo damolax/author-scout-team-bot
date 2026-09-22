@@ -397,3 +397,14 @@ tbody tr:hover{background:#fff9d9}
   .telegram-link-card{align-items:flex-start;flex-direction:column}
   .telegram-link-code{justify-content:flex-start}
 }
+
+
+.auth-divider{display:flex;align-items:center;gap:12px;margin:16px 0;color:#7a8491;font-size:11px}
+.auth-divider:before,.auth-divider:after{content:"";height:1px;flex:1;background:rgba(31,36,43,.14)}
+.auth-divider span{padding:0 2px}
+.email-auth-form{display:grid;gap:12px}
+.email-auth-form .field{margin:0}
+.button-auth-email{background:#111820;border-color:#111820;color:#fff;padding:12px 14px}
+.button-auth-email:hover{background:#202a34;border-color:#202a34}
+.auth-switch{display:block;width:100%;border:0;background:transparent;color:#49586a;font-size:12px;font-weight:650;padding:14px 8px 6px}
+.auth-switch:hover{color:#111820;text-decoration:underline;text-underline-offset:3px}
