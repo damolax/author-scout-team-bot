@@ -114,7 +114,8 @@ function Empty({ title, body }) {
   )
 }
 
-function Login({ onLogin, busy, error }) {
+function Login({ onLogin, onGoogle, busy, error }) {
+  const [showLegacy, setShowLegacy] = useState(false)
   const [key, setKey] = useState('')
   return (
     <div className="login-shell">
@@ -123,22 +124,22 @@ function Login({ onLogin, busy, error }) {
           <div className="brand-mark">AS</div>
           <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
         </div>
-        <h1>Sign in</h1>
-        <p className="login-copy">Send <code>/webkey</code> to @Authorscoutbot, then paste the key below.</p>
-        <form onSubmit={(e) => { e.preventDefault(); onLogin(key.trim()) }}>
-          <label>Web access key</label>
-          <textarea
-            rows="4"
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder="Paste your /webkey"
-            autoFocus
-          />
-          {error && <div className="alert alert-error">{error}</div>}
-          <button className="button button-primary button-block" disabled={!key.trim() || busy}>
-            {busy ? 'Checking…' : 'Enter Author Scout'}
-          </button>
-        </form>
+        <h1>Welcome back</h1>
+        <p className="login-copy">Sign in to your Author Scout workspace. New users get a private workspace automatically.</p>
+        {error && <div className="alert alert-error">{error}</div>}
+        <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
+          <span className="google-g">G</span>{busy ? 'Checking account…' : 'Continue with Google'}
+        </button>
+        <p className="login-note">You stay signed in on this device until you sign out or the session expires.</p>
+
+        <button className="legacy-toggle" onClick={() => setShowLegacy(v => !v)}>
+          {showLegacy ? 'Hide Telegram access key' : 'Already use the Telegram bot? Use access key'}
+        </button>
+        {showLegacy && <form className="legacy-login" onSubmit={(e) => { e.preventDefault(); onLogin(key.trim()) }}>
+          <label>Telegram web access key</label>
+          <textarea rows="3" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your /webkey" />
+          <button className="button button-quiet button-block" disabled={!key.trim() || busy}>Use Telegram key</button>
+        </form>}
       </div>
     </div>
   )
@@ -147,14 +148,26 @@ function Login({ onLogin, busy, error }) {
 function Dashboard({ keyValue, session, active }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
+  const [telegram, setTelegram] = useState(null)
+  const [linking, setLinking] = useState(false)
   const load = useCallback(async () => {
     try { setData(await request('/api/v1/dashboard', keyValue)); setError('') }
     catch (e) { setError(e.message) }
   }, [keyValue])
   usePolling(load, 8000, active)
 
+  const createTelegramLink = async () => {
+    setLinking(true); setError('')
+    try {
+      const d = await request('/api/v1/telegram/link-code', keyValue, { method:'POST', body:'{}' })
+      setTelegram(d)
+    } catch(e) { setError(e.message) }
+    finally { setLinking(false) }
+  }
+
   const counts = data?.counts || {}
-  const name = session?.user?.first_name || session?.user?.username || 'there'
+  const name = session?.account?.display_name || session?.user?.first_name || session?.user?.username || 'there'
+  const telegramLinked = Boolean(session?.account?.telegram_linked || telegram?.linked)
   return (
     <section>
       <div className="page-head">
@@ -167,6 +180,27 @@ function Dashboard({ keyValue, session, active }) {
         <Metric label="Active Scouts" value={counts.jobs_queued} />
         <Metric label="Ready Messages" value={counts.messages_ready} />
         <Metric label="Sent" value={counts.messages_sent} />
+      </div>
+
+      <div className="panel telegram-link-card">
+        <div>
+          <div className="eyebrow">Telegram companion</div>
+          <h2>{telegramLinked ? 'Telegram is connected' : 'Use Author Scout from Telegram too'}</h2>
+          <p>{telegramLinked
+            ? 'Your web app and Telegram companion use the same workspace.'
+            : 'Telegram is optional. Link it once to receive Scout updates and use quick actions from @Authorscoutbot.'}</p>
+        </div>
+        {telegramLinked
+          ? <span className="status status-completed">Connected</span>
+          : telegram?.code
+            ? <div className="telegram-link-code">
+                <span>Send this to @Authorscoutbot</span>
+                <code>{telegram.command}</code>
+                <a className="button button-quiet" href="https://t.me/Authorscoutbot" target="_blank" rel="noreferrer">Open Telegram ↗</a>
+              </div>
+            : <button className="button button-quiet" onClick={createTelegramLink} disabled={linking}>
+                {linking ? 'Creating code…' : 'Connect Telegram'}
+              </button>}
       </div>
     </section>
   )
@@ -832,7 +866,7 @@ const NAV = [
 ]
 
 function AppCore() {
-  const [keyValue, setKeyValue] = useState(() => sessionStorage.getItem('authorScoutKey') || '')
+  const [keyValue, setKeyValue] = useState(() => localStorage.getItem('authorScoutSession') || '')
   const [session, setSession] = useState(null)
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
@@ -842,24 +876,41 @@ function AppCore() {
     setChecking(true); setLoginError('')
     try {
       const s = await request('/api/v1/session', key)
-      sessionStorage.setItem('authorScoutKey', key)
+      localStorage.setItem('authorScoutSession', key)
       setKeyValue(key)
       setChecking(false)
       setSession(s)
     } catch(e) {
-      sessionStorage.removeItem('authorScoutKey')
+      localStorage.removeItem('authorScoutSession')
       setKeyValue(''); setSession(null); setLoginError(e.message)
     } finally { setChecking(false) }
   }, [])
 
-  useEffect(() => { if (keyValue && !session) verify(keyValue) }, [])
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const incoming = params.get('session')
+    const authError = params.get('auth_error')
+    if (incoming) {
+      localStorage.setItem('authorScoutSession', incoming)
+      setKeyValue(incoming)
+      window.history.replaceState({}, document.title, window.location.pathname)
+      verify(incoming)
+      return
+    }
+    if (authError) {
+      setLoginError('Google sign-in was cancelled or could not be completed.')
+      window.history.replaceState({}, document.title, window.location.pathname)
+      return
+    }
+    if (keyValue && !session) verify(keyValue)
+  }, [])
 
   const logout = () => {
-    sessionStorage.removeItem('authorScoutKey')
+    localStorage.removeItem('authorScoutSession')
     setKeyValue(''); setSession(null); setTab('dashboard')
   }
 
-  if (!session) return <Login onLogin={verify} busy={checking} error={loginError} />
+  if (!session) return <Login onLogin={verify} onGoogle={() => window.location.assign(API_BASE + '/auth/google/start')} busy={checking} error={loginError} />
 
   const displayName = session.user?.first_name || session.user?.username || 'User'
   const initials = String(displayName || 'AS').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase()
