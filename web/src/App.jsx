@@ -23,6 +23,32 @@ async function request(path, key, options = {}) {
   }
 }
 
+async function waitForBackend(maxWaitMs = 75000) {
+  const started = Date.now()
+  let lastError = null
+  while (Date.now() - started < maxWaitMs) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 12000)
+    try {
+      const res = await fetch(API_BASE + '/api/v1/health?ts=' + Date.now(), {
+        method: 'GET',
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+      if (res.ok) {
+        const body = await res.json().catch(() => ({}))
+        if (body?.ok) return true
+      }
+    } catch (e) {
+      lastError = e
+      clearTimeout(timer)
+    }
+    await new Promise(resolve => setTimeout(resolve, 1800))
+  }
+  throw lastError || new Error('Author Scout could not wake the secure login service. Please try again.')
+}
+
 function fmt(value) {
   if (!value) return '—'
   const d = new Date(value)
@@ -114,7 +140,7 @@ function Empty({ title, body }) {
   )
 }
 
-function Login({ onLogin, onGoogle, busy, error }) {
+function Login({ onLogin, onGoogle, busy, error, status }) {
   const [showLegacy, setShowLegacy] = useState(false)
   const [key, setKey] = useState('')
   return (
@@ -128,9 +154,9 @@ function Login({ onLogin, onGoogle, busy, error }) {
         <p className="login-copy">Sign in to your Author Scout workspace. New users get a private workspace automatically.</p>
         {error && <div className="alert alert-error">{error}</div>}
         <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
-          <span className="google-g">G</span>{busy ? 'Checking account…' : 'Continue with Google'}
+          <span className="google-g">G</span>{busy ? (status || 'Starting secure sign-in…') : 'Continue with Google'}
         </button>
-        <p className="login-note">You stay signed in on this device until you sign out or the session expires.</p>
+        <p className="login-note">{busy && status ? status + ' This can take around 30 seconds when the free research server is asleep.' : 'You stay signed in on this device until you sign out or the session expires.'}</p>
 
         <button className="legacy-toggle" onClick={() => setShowLegacy(v => !v)}>
           {showLegacy ? 'Hide Telegram access key' : 'Already use the Telegram bot? Use access key'}
@@ -870,6 +896,7 @@ function AppCore() {
   const [session, setSession] = useState(null)
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
+  const [loginStatus, setLoginStatus] = useState('')
   const [tab, setTab] = useState('dashboard')
 
   const verify = useCallback(async (key) => {
@@ -910,7 +937,22 @@ function AppCore() {
     setKeyValue(''); setSession(null); setTab('dashboard')
   }
 
-  if (!session) return <Login onLogin={verify} onGoogle={() => window.location.assign(API_BASE + '/auth/google/start')} busy={checking} error={loginError} />
+  const startGoogleLogin = useCallback(async () => {
+    setChecking(true)
+    setLoginError('')
+    setLoginStatus('Starting secure sign-in…')
+    try {
+      await waitForBackend()
+      setLoginStatus('Opening Google…')
+      window.location.assign(API_BASE + '/auth/google/start')
+    } catch (e) {
+      setLoginError(e?.message || 'Could not start Google sign-in. Please try again.')
+      setLoginStatus('')
+      setChecking(false)
+    }
+  }, [])
+
+  if (!session) return <Login onLogin={verify} onGoogle={startGoogleLogin} busy={checking} error={loginError} status={loginStatus} />
 
   const displayName = session.user?.first_name || session.user?.username || 'User'
   const initials = String(displayName || 'AS').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase()
