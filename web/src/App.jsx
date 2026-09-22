@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { authClient, sessionTokenFrom } from './auth.js'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://author-scout-team-bot.onrender.com').replace(/\/$/, '')
 
@@ -140,9 +141,14 @@ function Empty({ title, body }) {
   )
 }
 
-function Login({ onLogin, onGoogle, busy, error, status }) {
+function Login({ onLegacyLogin, onGoogle, onEmail, busy, error, status }) {
+  const [mode, setMode] = useState('signin')
   const [showLegacy, setShowLegacy] = useState(false)
-  const [key, setKey] = useState('')
+  const [legacyKey, setLegacyKey] = useState('')
+  const [form, setForm] = useState({ name:'', email:'', password:'' })
+  const setField = (k,v) => setForm(prev => ({...prev,[k]:v}))
+  const signup = mode === 'signup'
+
   return (
     <div className="login-shell">
       <div className="login-card">
@@ -150,21 +156,56 @@ function Login({ onLogin, onGoogle, busy, error, status }) {
           <div className="brand-mark">AS</div>
           <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
         </div>
-        <h1>Welcome back</h1>
-        <p className="login-copy">Sign in to your Author Scout workspace. New users get a private workspace automatically.</p>
+        <h1>{signup ? 'Create your account' : 'Welcome back'}</h1>
+        <p className="login-copy">
+          {signup
+            ? 'Create a private Author Scout workspace with your email and password. Email verification is not required to start using the app.'
+            : 'Sign in to your Author Scout workspace.'}
+        </p>
+
         {error && <div className="alert alert-error">{error}</div>}
+
         <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
-          <span className="google-g">G</span>{busy ? (status || 'Starting secure sign-in…') : 'Continue with Google'}
+          <span className="google-g">G</span>{busy && status ? status : 'Continue with Google'}
         </button>
-        <p className="login-note">{busy && status ? status + ' This can take around 30 seconds when the free research server is asleep.' : 'You stay signed in on this device until you sign out or the session expires.'}</p>
+
+        <div className="auth-divider"><span>or</span></div>
+
+        <form className="email-auth-form" onSubmit={(e) => { e.preventDefault(); onEmail(mode, form) }}>
+          {signup && <div className="field">
+            <label>Name</label>
+            <input value={form.name} onChange={e => setField('name',e.target.value)} placeholder="Your name" autoComplete="name" required />
+          </div>}
+          <div className="field">
+            <label>Email</label>
+            <input type="email" value={form.email} onChange={e => setField('email',e.target.value)} placeholder="you@example.com" autoComplete="email" required />
+          </div>
+          <div className="field">
+            <label>Password</label>
+            <input type="password" value={form.password} onChange={e => setField('password',e.target.value)}
+              placeholder={signup ? 'Create a secure password' : 'Your password'}
+              autoComplete={signup ? 'new-password' : 'current-password'} minLength="8" required />
+          </div>
+          <button className="button button-auth-email button-block" disabled={busy}>
+            {busy ? (status || 'Please wait…') : (signup ? 'Create account' : 'Sign in')}
+          </button>
+        </form>
+
+        <button className="auth-switch" onClick={() => setMode(signup ? 'signin' : 'signup')} disabled={busy}>
+          {signup ? 'Already have an account? Sign in' : 'New to Author Scout? Create account'}
+        </button>
+
+        <p className="login-note">
+          {signup ? 'Your account works immediately whether the email is verified or not.' : 'You stay signed in on this device until you sign out or the session expires.'}
+        </p>
 
         <button className="legacy-toggle" onClick={() => setShowLegacy(v => !v)}>
-          {showLegacy ? 'Hide Telegram access key' : 'Already use the Telegram bot? Use access key'}
+          {showLegacy ? 'Hide Telegram access key' : 'Older Telegram account? Use /webkey'}
         </button>
-        {showLegacy && <form className="legacy-login" onSubmit={(e) => { e.preventDefault(); onLogin(key.trim()) }}>
+        {showLegacy && <form className="legacy-login" onSubmit={(e) => { e.preventDefault(); onLegacyLogin(legacyKey.trim()) }}>
           <label>Telegram web access key</label>
-          <textarea rows="3" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste your /webkey" />
-          <button className="button button-quiet button-block" disabled={!key.trim() || busy}>Use Telegram key</button>
+          <textarea rows="3" value={legacyKey} onChange={(e) => setLegacyKey(e.target.value)} placeholder="Paste your /webkey" />
+          <button className="button button-quiet button-block" disabled={!legacyKey.trim() || busy}>Use Telegram key</button>
         </form>}
       </div>
     </div>
@@ -912,47 +953,117 @@ function AppCore() {
       setKeyValue(''); setSession(null); setLoginError(e.message)
     } finally { setChecking(false) }
   }, [])
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const incoming = params.get('session')
-    const authError = params.get('auth_error')
-    if (incoming) {
-      localStorage.setItem('authorScoutSession', incoming)
-      setKeyValue(incoming)
-      window.history.replaceState({}, document.title, window.location.pathname)
-      verify(incoming)
-      return
-    }
-    if (authError) {
-      setLoginError('Google sign-in was cancelled or could not be completed.')
-      window.history.replaceState({}, document.title, window.location.pathname)
-      return
-    }
-    if (keyValue && !session) verify(keyValue)
-  }, [])
-
-  const logout = () => {
-    localStorage.removeItem('authorScoutSession')
-    setKeyValue(''); setSession(null); setTab('dashboard')
-  }
-
-  const startGoogleLogin = useCallback(async () => {
+  const exchangeManagedAuth = useCallback(async (authResult = null) => {
     setChecking(true)
     setLoginError('')
-    setLoginStatus('Starting secure sign-in…')
+    setLoginStatus('Opening your workspace…')
     try {
-      await waitForBackend()
-      setLoginStatus('Opening Google…')
-      window.location.assign(API_BASE + '/auth/google/start')
-    } catch (e) {
-      setLoginError(e?.message || 'Could not start Google sign-in. Please try again.')
+      let token=sessionTokenFrom(authResult)
+      if (!token) {
+        const current=await authClient.getSession()
+        if (current?.error) throw new Error(current.error.message || 'Could not read your session')
+        token=sessionTokenFrom(current)
+      }
+      if (!token) throw new Error('Signed in, but no secure session token was returned. Please try again.')
+      const d=await request('/api/v1/auth/neon-session','',{
+        method:'POST',
+        body:JSON.stringify({ session_token: token })
+      })
+      localStorage.setItem('authorScoutSession',d.session)
+      setKeyValue(d.session)
+      const s=await request('/api/v1/session',d.session)
+      setSession(s)
       setLoginStatus('')
+      return s
+    } catch(e) {
+      setLoginError(e?.message || 'Could not open your workspace.')
+      setLoginStatus('')
+      throw e
+    } finally {
       setChecking(false)
     }
   }, [])
 
-  if (!session) return <Login onLogin={verify} onGoogle={startGoogleLogin} busy={checking} error={loginError} status={loginStatus} />
+  const startEmailAuth = useCallback(async (mode, form) => {
+    setChecking(true)
+    setLoginError('')
+    setLoginStatus(mode === 'signup' ? 'Creating account…' : 'Signing in…')
+    try {
+      const email=String(form.email || '').trim().toLowerCase()
+      const password=String(form.password || '')
+      const result=mode === 'signup'
+        ? await authClient.signUp.email({ email, password, name:String(form.name || '').trim() || email.split('@')[0] })
+        : await authClient.signIn.email({ email, password })
+      if (result?.error) throw new Error(result.error.message || 'Authentication failed')
+      await exchangeManagedAuth(result)
+    } catch(e) {
+      setLoginError(e?.message || 'Authentication failed.')
+      setLoginStatus('')
+      setChecking(false)
+    }
+  }, [exchangeManagedAuth])
+
+  const startManagedGoogle = useCallback(async () => {
+    setChecking(true)
+    setLoginError('')
+    setLoginStatus('Opening Google…')
+    try {
+      const result=await authClient.signIn.social({
+        provider:'google',
+        callbackURL:window.location.origin
+      })
+      if (result?.error) throw new Error(result.error.message || 'Google sign-in failed')
+      // Most social sign-ins redirect. If Neon returns a session directly, handle it too.
+      if (sessionTokenFrom(result)) await exchangeManagedAuth(result)
+    } catch(e) {
+      setLoginError(e?.message || 'Google sign-in failed.')
+      setLoginStatus('')
+      setChecking(false)
+    }
+  }, [exchangeManagedAuth])
+
+
+  useEffect(() => {
+    let cancelled=false
+    const boot=async () => {
+      const params = new URLSearchParams(window.location.search)
+      const incoming = params.get('session')
+      const authError = params.get('auth_error')
+      if (incoming) {
+        localStorage.setItem('authorScoutSession', incoming)
+        setKeyValue(incoming)
+        window.history.replaceState({}, document.title, window.location.pathname)
+        await verify(incoming)
+        return
+      }
+      if (authError) {
+        setLoginError('Sign-in was cancelled or could not be completed.')
+        window.history.replaceState({}, document.title, window.location.pathname)
+        return
+      }
+      if (keyValue && !session) {
+        await verify(keyValue)
+        return
+      }
+      // Handles return from managed Google Auth, or an existing Neon Auth browser session.
+      try {
+        const current=await authClient.getSession()
+        if (!cancelled && !current?.error && sessionTokenFrom(current)) {
+          await exchangeManagedAuth(current)
+        }
+      } catch {}
+    }
+    boot()
+    return () => { cancelled=true }
+  }, [])
+
+  const logout = async () => {
+    localStorage.removeItem('authorScoutSession')
+    try { await authClient.signOut() } catch {}
+    setKeyValue(''); setSession(null); setTab('dashboard')
+  }
+
+  if (!session) return <Login onLegacyLogin={verify} onGoogle={startManagedGoogle} onEmail={startEmailAuth} busy={checking} error={loginError} status={loginStatus} />
 
   const displayName = session.user?.first_name || session.user?.username || 'User'
   const initials = String(displayName || 'AS').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase()
