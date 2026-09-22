@@ -1304,8 +1304,15 @@ async def oauth_start(t:str):
 
 @app.get("/oauth/google/callback")
 async def oauth_callback(code:str,state:str,error:str=""):
+    try:
+        p=serializer.loads(state,max_age=900)
+    except Exception:
+        raise HTTPException(400,"Invalid or expired Google state")
+    if isinstance(p,dict) and p.get("mode")=="web_login":
+        import bot_main_v3 as webapp
+        return await webapp.handle_web_google_callback(code,state,error)
     if error:return HTMLResponse("Gmail connection cancelled.",400)
-    p=serializer.loads(state,max_age=900);uid=int(p["uid"])
+    uid=int(p["uid"])
     async with httpx.AsyncClient(timeout=30) as c:
         tr=await c.post(GOOGLE_TOKEN,data={"client_id":GOOGLE_CLIENT_ID,"client_secret":GOOGLE_CLIENT_SECRET,"code":code,"grant_type":"authorization_code","redirect_uri":GOOGLE_REDIRECT_URI});tr.raise_for_status();td=tr.json()
         pr=await c.get(GOOGLE_USERINFO,headers={"Authorization":f"Bearer {td['access_token']}"});pr.raise_for_status();profile=pr.json()
