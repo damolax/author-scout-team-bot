@@ -1549,6 +1549,105 @@ async def ai_research_worker():
             await asyncio.sleep(AI_RESEARCH_POLL_SECONDS)
 
 
+
+def _ensure_personal_team(app_uid: int, name: str, email: str) -> dict:
+    user=legacy.row("SELECT * FROM users WHERE telegram_user_id=:u",u=app_uid)
+    if user and user.get("team_id"):
+        t=legacy.row("SELECT * FROM teams WHERE id=:i",i=user["team_id"])
+        if t:return t
+    label=(name or email.split("@")[0] or "Author Scout").strip()
+    invite=legacy.invite()
+    now=legacy.iso()
+    with legacy.engine.begin() as c:
+        r=c.execute(text("INSERT INTO teams(name,invite_code,owner_user_id,created_at) VALUES(:n,:c,:u,:d) RETURNING id"),
+                    {"n":f"{label}'s Workspace","c":invite,"u":app_uid,"d":now})
+        tid=int(r.scalar_one())
+        ex=c.execute(text("SELECT telegram_user_id FROM users WHERE telegram_user_id=:u"),{"u":app_uid}).first()
+        if ex:
+            c.execute(text("UPDATE users SET username=:e,first_name=:n,team_id=:t,updated_at=:d WHERE telegram_user_id=:u"),
+                      {"e":email,"n":name,"t":tid,"d":now,"u":app_uid})
+        else:
+            c.execute(text("INSERT INTO users(telegram_user_id,username,first_name,team_id,created_at,updated_at) VALUES(:u,:e,:n,:t,:d,:d)"),
+                      {"u":app_uid,"e":email,"n":name,"t":tid,"d":now})
+    return legacy.row("SELECT * FROM teams WHERE id=:i",i=tid)
+
+def _get_or_create_web_account(profile: dict) -> dict:
+    sub=str(profile.get("sub") or "").strip()
+    email=str(profile.get("email") or "").strip().lower()
+    name=str(profile.get("name") or profile.get("given_name") or email.split("@")[0]).strip()
+    if not sub or not email:
+        raise legacy.HTTPException(status_code=400,detail="Google account did not provide an email address")
+    ex=legacy.row("SELECT * FROM web_accounts WHERE google_subject=:s OR lower(email)=:e ORDER BY id LIMIT 1",s=sub,e=email)
+    now=legacy.iso()
+    if ex:
+        legacy.execq("UPDATE web_accounts SET google_subject=:s,email=:e,display_name=:n,updated_at=:d WHERE id=:i",
+                     s=sub,e=email,n=name,d=now,i=ex["id"])
+        return legacy.row("SELECT * FROM web_accounts WHERE id=:i",i=ex["id"])
+    gmail=legacy.row("""SELECT ga.telegram_user_id,u.team_id
+        FROM gmail_accounts ga LEFT JOIN users u ON u.telegram_user_id=ga.telegram_user_id
+        WHERE ga.google_subject=:s OR lower(ga.email)=:e ORDER BY ga.id LIMIT 1""",s=sub,e=email)
+    if gmail:
+        app_uid=int(gmail["telegram_user_id"])
+        team=legacy.team(app_uid) or _ensure_personal_team(app_uid,name,email)
+        telegram_uid=app_uid
+    else:
+        # Reserve the account row, then derive a negative internal user id. Telegram ids are positive.
+        with legacy.engine.begin() as c:
+            r=c.execute(text("""INSERT INTO web_accounts(
+                google_subject,email,display_name,app_user_id,team_id,telegram_user_id,created_at,updated_at)
+                VALUES(:s,:e,:n,0,0,NULL,:d,:d) RETURNING id"""),
+                {"s":sub,"e":email,"n":name,"d":now})
+            aid=int(r.scalar_one())
+        app_uid=-2000000000000-aid
+        team=_ensure_personal_team(app_uid,name,email)
+        telegram_uid=None
+        legacy.execq("UPDATE web_accounts SET app_user_id=:u,team_id=:t,updated_at=:d WHERE id=:i",
+                     u=app_uid,t=team["id"],d=now,i=aid)
+        return legacy.row("SELECT * FROM web_accounts WHERE id=:i",i=aid)
+    with legacy.engine.begin() as c:
+        r=c.execute(text("""INSERT INTO web_accounts(
+            google_subject,email,display_name,app_user_id,team_id,telegram_user_id,created_at,updated_at)
+            VALUES(:s,:e,:n,:u,:t,:tg,:d,:d) RETURNING id"""),
+            {"s":sub,"e":email,"n":name,"u":app_uid,"t":team["id"],"tg":telegram_uid,"d":now})
+        aid=int(r.scalar_one())
+    return legacy.row("SELECT * FROM web_accounts WHERE id=:i",i=aid)
+
+def _issue_web_session(account: dict) -> str:
+    return legacy.serializer.dumps({"scope":"web_login","account_id":int(account["id"])})
+
+async def handle_web_google_callback(code: str, state: str, error: str=""):
+    if error:
+        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?auth_error="+urlencode({"e":error})[2:])
+    p=legacy.serializer.loads(state,max_age=900)
+    if p.get("mode")!="web_login":
+        raise legacy.HTTPException(status_code=400,detail="Invalid login state")
+    async with legacy.httpx.AsyncClient(timeout=30) as c:
+        tr=await c.post(legacy.GOOGLE_TOKEN,data={
+            "client_id":legacy.GOOGLE_CLIENT_ID,"client_secret":legacy.GOOGLE_CLIENT_SECRET,
+            "code":code,"grant_type":"authorization_code","redirect_uri":legacy.GOOGLE_REDIRECT_URI})
+        tr.raise_for_status(); td=tr.json()
+        pr=await c.get(legacy.GOOGLE_USERINFO,headers={"Authorization":f"Bearer {td['access_token']}"})
+        pr.raise_for_status(); profile=pr.json()
+    account=await asyncio.to_thread(_get_or_create_web_account,profile)
+    token=_issue_web_session(account)
+    return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?session="+urlencode({"s":token})[2:])
+
+@app.get("/auth/google/start")
+async def web_google_start():
+    if not all([legacy.GOOGLE_CLIENT_ID,legacy.GOOGLE_CLIENT_SECRET,legacy.GOOGLE_REDIRECT_URI]):
+        raise legacy.HTTPException(status_code=503,detail="Google login is not configured")
+    state=legacy.serializer.dumps({"mode":"web_login"})
+    params={
+        "client_id":legacy.GOOGLE_CLIENT_ID,
+        "redirect_uri":legacy.GOOGLE_REDIRECT_URI,
+        "response_type":"code",
+        "scope":"openid email profile",
+        "state":state,
+        "prompt":"select_account"
+    }
+    return legacy.RedirectResponse(legacy.GOOGLE_AUTH+"?"+urlencode(params))
+
+
 # ---------------------------------------------------------------------------
 # Web dashboard API + queued research
 # ---------------------------------------------------------------------------
@@ -1561,8 +1660,16 @@ def _web_auth_from_key(key: str) -> dict:
         payload=legacy.serializer.loads(key,max_age=WEB_KEY_MAX_AGE_SECONDS)
     except Exception:
         raise legacy.HTTPException(status_code=401, detail="Invalid or expired web access key")
-    if not isinstance(payload,dict) or payload.get("scope")!="web":
-        raise legacy.HTTPException(status_code=401, detail="Invalid web access key")
+    if not isinstance(payload,dict) or payload.get("scope") not in {"web","web_login"}:
+        raise legacy.HTTPException(status_code=401, detail="Invalid web session")
+    if payload.get("scope")=="web_login":
+        account=legacy.row("SELECT * FROM web_accounts WHERE id=:i",i=int(payload.get("account_id") or 0))
+        if not account:
+            raise legacy.HTTPException(status_code=401,detail="Web account no longer exists")
+        return {"scope":"web_login","admin":False,"account_id":int(account["id"]),
+                "team_id":int(account["team_id"]),"uid":int(account["app_user_id"]),
+                "email":account["email"],"display_name":account.get("display_name") or "",
+                "telegram_user_id":account.get("telegram_user_id")}
     return {"scope":"web","admin":False,"team_id":int(payload.get("team_id") or 0),"uid":int(payload.get("uid") or 0)}
 
 def _web_auth(request) -> dict:
@@ -1813,7 +1920,10 @@ async def web_session(request: legacy.Request):
     team=_auth_team(ctx)
     uid=ctx.get("uid")
     user=legacy.row("SELECT telegram_user_id,username,first_name FROM users WHERE telegram_user_id=:u",u=uid) if uid else None
-    return {"ok":True,"team":{"id":team["id"],"name":team["name"]},"user":user,"version":app.version}
+    return {"ok":True,"team":{"id":team["id"],"name":team["name"]},"user":user,"version":app.version,
+            "account":{"email":ctx.get("email") or (user or {}).get("username",""),
+                       "display_name":ctx.get("display_name") or (user or {}).get("first_name",""),
+                       "telegram_linked":bool(ctx.get("telegram_user_id") or (uid and uid>0))}}
 
 @app.get("/api/v1/dashboard")
 async def web_dashboard(request: legacy.Request):
