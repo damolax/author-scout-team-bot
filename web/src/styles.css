@@ -408,3 +408,13 @@ tbody tr:hover{background:#fff9d9}
 .button-auth-email:hover{background:#202a34;border-color:#202a34}
 .auth-switch{display:block;width:100%;border:0;background:transparent;color:#49586a;font-size:12px;font-weight:650;padding:14px 8px 6px}
 .auth-switch:hover{color:#111820;text-decoration:underline;text-underline-offset:3px}
+
+
+.label-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:7px}
+.label-row label{margin-bottom:0}
+.forgot-link{border:0;background:transparent;color:#6b5a21;font-size:11px;font-weight:700;padding:0}
+.forgot-link:hover{text-decoration:underline;text-underline-offset:3px}
+.forgot-success{text-align:center;padding:6px 0 2px}
+.forgot-success-icon{width:48px;height:48px;margin:0 auto 12px;border-radius:50%;display:grid;place-items:center;background:rgba(68,145,99,.12);border:1px solid rgba(68,145,99,.28);color:#2f7b4a;font-size:22px;font-weight:800}
+.forgot-success h3,.forgot-success h1{margin:0 0 8px}
+.forgot-success p{color:#727b87;font-size:12px;line-height:1.55;margin:0 0 18px}
