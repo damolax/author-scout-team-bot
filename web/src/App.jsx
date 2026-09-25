@@ -141,13 +141,21 @@ function Empty({ title, body }) {
   )
 }
 
-function Login({ onLegacyLogin, onGoogle, onEmail, busy, error, status }) {
+function Login({ onLegacyLogin, onGoogle, onEmail, onForgot, busy, error, status }) {
   const [mode, setMode] = useState('signin')
   const [showLegacy, setShowLegacy] = useState(false)
   const [legacyKey, setLegacyKey] = useState('')
+  const [forgotSent, setForgotSent] = useState(false)
   const [form, setForm] = useState({ name:'', email:'', password:'' })
   const setField = (k,v) => setForm(prev => ({...prev,[k]:v}))
   const signup = mode === 'signup'
+  const forgot = mode === 'forgot'
+
+  const submitForgot = async (e) => {
+    e.preventDefault()
+    const ok = await onForgot(form.email)
+    if (ok) setForgotSent(true)
+  }
 
   return (
     <div className="login-shell">
@@ -156,57 +164,151 @@ function Login({ onLegacyLogin, onGoogle, onEmail, busy, error, status }) {
           <div className="brand-mark">AS</div>
           <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
         </div>
-        <h1>{signup ? 'Create your account' : 'Welcome back'}</h1>
-        <p className="login-copy">
-          {signup
-            ? 'Create a private Author Scout workspace with your email and password. Email verification is not required to start using the app.'
-            : 'Sign in to your Author Scout workspace.'}
-        </p>
 
-        {error && <div className="alert alert-error">{error}</div>}
+        {forgot ? <>
+          <h1>Reset your password</h1>
+          <p className="login-copy">
+            Enter the email address for your Author Scout account. We’ll send you a secure reset link.
+          </p>
+          {error && <div className="alert alert-error">{error}</div>}
+          {forgotSent ? <div className="forgot-success">
+            <div className="forgot-success-icon">✓</div>
+            <h3>Check your email</h3>
+            <p>If an account exists for <strong>{form.email}</strong>, a password reset link has been sent.</p>
+            <button className="button button-auth-email button-block" onClick={() => { setMode('signin'); setForgotSent(false) }}>
+              Back to sign in
+            </button>
+          </div> : <form className="email-auth-form" onSubmit={submitForgot}>
+            <div className="field">
+              <label>Email</label>
+              <input type="email" value={form.email} onChange={e => setField('email',e.target.value)}
+                placeholder="you@example.com" autoComplete="email" required />
+            </div>
+            <button className="button button-auth-email button-block" disabled={busy}>
+              {busy ? (status || 'Sending reset link…') : 'Send reset link'}
+            </button>
+            <button type="button" className="auth-switch" onClick={() => setMode('signin')} disabled={busy}>
+              Back to sign in
+            </button>
+          </form>}
+        </> : <>
+          <h1>{signup ? 'Create your account' : 'Welcome back'}</h1>
+          <p className="login-copy">
+            {signup
+              ? 'Create a private Author Scout workspace with your email and password. Email verification is not required to start using the app.'
+              : 'Sign in to your Author Scout workspace.'}
+          </p>
 
-        <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
-          <span className="google-g">G</span>{busy && status ? status : 'Continue with Google'}
-        </button>
+          {error && <div className="alert alert-error">{error}</div>}
 
-        <div className="auth-divider"><span>or</span></div>
-
-        <form className="email-auth-form" onSubmit={(e) => { e.preventDefault(); onEmail(mode, form) }}>
-          {signup && <div className="field">
-            <label>Name</label>
-            <input value={form.name} onChange={e => setField('name',e.target.value)} placeholder="Your name" autoComplete="name" required />
-          </div>}
-          <div className="field">
-            <label>Email</label>
-            <input type="email" value={form.email} onChange={e => setField('email',e.target.value)} placeholder="you@example.com" autoComplete="email" required />
-          </div>
-          <div className="field">
-            <label>Password</label>
-            <input type="password" value={form.password} onChange={e => setField('password',e.target.value)}
-              placeholder={signup ? 'Create a secure password' : 'Your password'}
-              autoComplete={signup ? 'new-password' : 'current-password'} minLength="8" required />
-          </div>
-          <button className="button button-auth-email button-block" disabled={busy}>
-            {busy ? (status || 'Please wait…') : (signup ? 'Create account' : 'Sign in')}
+          <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
+            <span className="google-g">G</span>{busy && status ? status : 'Continue with Google'}
           </button>
-        </form>
 
-        <button className="auth-switch" onClick={() => setMode(signup ? 'signin' : 'signup')} disabled={busy}>
-          {signup ? 'Already have an account? Sign in' : 'New to Author Scout? Create account'}
-        </button>
+          <div className="auth-divider"><span>or</span></div>
 
-        <p className="login-note">
-          {signup ? 'Your account works immediately whether the email is verified or not.' : 'You stay signed in on this device until you sign out or the session expires.'}
-        </p>
+          <form className="email-auth-form" onSubmit={(e) => { e.preventDefault(); onEmail(mode, form) }}>
+            {signup && <div className="field">
+              <label>Name</label>
+              <input value={form.name} onChange={e => setField('name',e.target.value)} placeholder="Your name" autoComplete="name" required />
+            </div>}
+            <div className="field">
+              <label>Email</label>
+              <input type="email" value={form.email} onChange={e => setField('email',e.target.value)} placeholder="you@example.com" autoComplete="email" required />
+            </div>
+            <div className="field">
+              <div className="label-row">
+                <label>Password</label>
+                {!signup && <button type="button" className="forgot-link" onClick={() => setMode('forgot')}>Forgot password?</button>}
+              </div>
+              <input type="password" value={form.password} onChange={e => setField('password',e.target.value)}
+                placeholder={signup ? 'Create a secure password' : 'Your password'}
+                autoComplete={signup ? 'new-password' : 'current-password'} minLength="8" required />
+            </div>
+            <button className="button button-auth-email button-block" disabled={busy}>
+              {busy ? (status || 'Please wait…') : (signup ? 'Create account' : 'Sign in')}
+            </button>
+          </form>
 
-        <button className="legacy-toggle" onClick={() => setShowLegacy(v => !v)}>
-          {showLegacy ? 'Hide Telegram access key' : 'Older Telegram account? Use /webkey'}
-        </button>
-        {showLegacy && <form className="legacy-login" onSubmit={(e) => { e.preventDefault(); onLegacyLogin(legacyKey.trim()) }}>
-          <label>Telegram web access key</label>
-          <textarea rows="3" value={legacyKey} onChange={(e) => setLegacyKey(e.target.value)} placeholder="Paste your /webkey" />
-          <button className="button button-quiet button-block" disabled={!legacyKey.trim() || busy}>Use Telegram key</button>
-        </form>}
+          <button className="auth-switch" onClick={() => setMode(signup ? 'signin' : 'signup')} disabled={busy}>
+            {signup ? 'Already have an account? Sign in' : 'New to Author Scout? Create account'}
+          </button>
+
+          <p className="login-note">
+            {signup ? 'Your account works immediately whether the email is verified or not.' : 'You stay signed in on this device until you sign out or the session expires.'}
+          </p>
+
+          <button className="legacy-toggle" onClick={() => setShowLegacy(v => !v)}>
+            {showLegacy ? 'Hide Telegram access key' : 'Older Telegram account? Use /webkey'}
+          </button>
+          {showLegacy && <form className="legacy-login" onSubmit={(e) => { e.preventDefault(); onLegacyLogin(legacyKey.trim()) }}>
+            <label>Telegram web access key</label>
+            <textarea rows="3" value={legacyKey} onChange={(e) => setLegacyKey(e.target.value)} placeholder="Paste your /webkey" />
+            <button className="button button-quiet button-block" disabled={!legacyKey.trim() || busy}>Use Telegram key</button>
+          </form>}
+        </>}
+      </div>
+    </div>
+  )
+}
+
+function ResetPasswordScreen({ token, errorCode, onDone }) {
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(errorCode ? 'This reset link is invalid or has expired. Request a new one.' : '')
+  const [done, setDone] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (password.length < 8) { setError('Password must be at least 8 characters.'); return }
+    if (password !== confirm) { setError('The passwords do not match.'); return }
+    if (!token) { setError('This reset link is invalid or has expired.'); return }
+    setBusy(true); setError('')
+    try {
+      const result = await authClient.resetPassword({ newPassword: password, token })
+      if (result?.error) throw new Error(result.error.message || 'Could not reset password')
+      setDone(true)
+    } catch(e) {
+      setError(e?.message || 'Could not reset password. Please request a new reset link.')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="login-shell">
+      <div className="login-card">
+        <div className="brand brand-login">
+          <div className="brand-mark">AS</div>
+          <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
+        </div>
+        {done ? <>
+          <div className="forgot-success">
+            <div className="forgot-success-icon">✓</div>
+            <h1>Password updated</h1>
+            <p>Your new password is ready. You can sign in to Author Scout now.</p>
+            <button className="button button-auth-email button-block" onClick={onDone}>Continue to sign in</button>
+          </div>
+        </> : <>
+          <h1>Choose a new password</h1>
+          <p className="login-copy">Enter a new password for your Author Scout account.</p>
+          {error && <div className="alert alert-error">{error}</div>}
+          <form className="email-auth-form" onSubmit={submit}>
+            <div className="field">
+              <label>New password</label>
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+                minLength="8" autoComplete="new-password" placeholder="At least 8 characters" required />
+            </div>
+            <div className="field">
+              <label>Confirm new password</label>
+              <input type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
+                minLength="8" autoComplete="new-password" placeholder="Repeat your new password" required />
+            </div>
+            <button className="button button-auth-email button-block" disabled={busy || !token}>
+              {busy ? 'Updating password…' : 'Set new password'}
+            </button>
+          </form>
+          <button className="auth-switch" onClick={onDone}>Back to sign in</button>
+        </>}
       </div>
     </div>
   )
@@ -1022,6 +1124,28 @@ function AppCore() {
     }
   }, [exchangeManagedAuth])
 
+  const startForgotPassword = useCallback(async (emailValue) => {
+    const email=String(emailValue || '').trim().toLowerCase()
+    if (!email) { setLoginError('Enter your email address.'); return false }
+    setChecking(true)
+    setLoginError('')
+    setLoginStatus('Sending reset link…')
+    try {
+      const result=await authClient.requestPasswordReset({
+        email,
+        redirectTo: window.location.origin + '/reset-password'
+      })
+      if (result?.error) throw new Error(result.error.message || 'Could not send reset link')
+      return true
+    } catch(e) {
+      setLoginError(e?.message || 'Could not send reset link. Please try again.')
+      return false
+    } finally {
+      setChecking(false)
+      setLoginStatus('')
+    }
+  }, [])
+
 
   useEffect(() => {
     let cancelled=false
@@ -1063,7 +1187,29 @@ function AppCore() {
     setKeyValue(''); setSession(null); setTab('dashboard')
   }
 
-  if (!session) return <Login onLegacyLogin={verify} onGoogle={startManagedGoogle} onEmail={startEmailAuth} busy={checking} error={loginError} status={loginStatus} />
+  const resetParams = new URLSearchParams(window.location.search)
+  const isResetPage = window.location.pathname === '/reset-password' || Boolean(resetParams.get('token')) || Boolean(resetParams.get('error'))
+  if (!session && isResetPage) return <ResetPasswordScreen
+    token={resetParams.get('token') || ''}
+    errorCode={resetParams.get('error') || ''}
+    onDone={() => {
+      window.history.replaceState({}, document.title, '/')
+      setLoginError('')
+      setLoginStatus('')
+      setKeyValue('')
+      setSession(null)
+    }}
+  />
+
+  if (!session) return <Login
+    onLegacyLogin={verify}
+    onGoogle={startManagedGoogle}
+    onEmail={startEmailAuth}
+    onForgot={startForgotPassword}
+    busy={checking}
+    error={loginError}
+    status={loginStatus}
+  />
 
   const displayName = session.user?.first_name || session.user?.username || 'User'
   const initials = String(displayName || 'AS').trim().split(/\s+/).slice(0,2).map(x => x[0]).join('').toUpperCase()
