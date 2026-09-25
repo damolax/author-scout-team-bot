@@ -319,11 +319,47 @@ function Dashboard({ keyValue, session, active }) {
   const [error, setError] = useState('')
   const [telegram, setTelegram] = useState(null)
   const [linking, setLinking] = useState(false)
+  const [authMethods, setAuthMethods] = useState([])
+  const [authMethodsError, setAuthMethodsError] = useState('')
+  const [googleLinking, setGoogleLinking] = useState(false)
   const load = useCallback(async () => {
     try { setData(await request('/api/v1/dashboard', keyValue)); setError('') }
     catch (e) { setError(e.message) }
   }, [keyValue])
   usePolling(load, 8000, active)
+
+  const loadAuthMethods = useCallback(async () => {
+    try {
+      const result=await authClient.listAccounts()
+      if (result?.error) throw new Error(result.error.message || 'Could not read sign-in methods')
+      setAuthMethods(Array.isArray(result?.data) ? result.data : [])
+      setAuthMethodsError('')
+    } catch(e) {
+      // Older /webkey-only sessions may not have an active managed-auth cookie.
+      setAuthMethods([])
+      setAuthMethodsError('')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (active) loadAuthMethods()
+  }, [active, loadAuthMethods])
+
+  const linkGoogle = async () => {
+    setGoogleLinking(true)
+    setAuthMethodsError('')
+    try {
+      const result=await authClient.linkSocial({
+        provider:'google',
+        callbackURL:window.location.origin
+      })
+      if (result?.error) throw new Error(result.error.message || 'Could not connect Google')
+      if (result?.data && !result.data.url) await loadAuthMethods()
+    } catch(e) {
+      setAuthMethodsError(e?.message || 'Could not connect Google. Use the same email address as your Author Scout account.')
+      setGoogleLinking(false)
+    }
+  }
 
   const createTelegramLink = async () => {
     setLinking(true); setError('')
@@ -349,6 +385,31 @@ function Dashboard({ keyValue, session, active }) {
         <Metric label="Active Scouts" value={counts.jobs_queued} />
         <Metric label="Ready Messages" value={counts.messages_ready} />
         <Metric label="Sent" value={counts.messages_sent} />
+      </div>
+
+      <div className="panel account-access-card">
+        <div>
+          <div className="eyebrow">Sign-in methods</div>
+          <h2>Use email/password or Google</h2>
+          <p>Both methods can open the same Author Scout workspace. Google linking only accepts the matching account email.</p>
+        </div>
+        <div className="auth-methods">
+          <div className="auth-method-row">
+            <span className="auth-method-icon">@</span>
+            <div><strong>Email & password</strong><small>Available for this account</small></div>
+            <span className="status status-completed">Enabled</span>
+          </div>
+          <div className="auth-method-row">
+            <span className="auth-method-icon">G</span>
+            <div><strong>Google</strong><small>{authMethods.some(a => a.providerId === 'google') ? 'Connected to this account' : 'Optional sign-in method'}</small></div>
+            {authMethods.some(a => a.providerId === 'google')
+              ? <span className="status status-completed">Connected</span>
+              : <button className="button button-quiet" onClick={linkGoogle} disabled={googleLinking}>
+                  {googleLinking ? 'Connecting…' : 'Connect Google'}
+                </button>}
+          </div>
+          {authMethodsError && <div className="alert alert-error">{authMethodsError}</div>}
+        </div>
       </div>
 
       <div className="panel telegram-link-card">
