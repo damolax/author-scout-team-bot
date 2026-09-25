@@ -418,3 +418,17 @@ tbody tr:hover{background:#fff9d9}
 .forgot-success-icon{width:48px;height:48px;margin:0 auto 12px;border-radius:50%;display:grid;place-items:center;background:rgba(68,145,99,.12);border:1px solid rgba(68,145,99,.28);color:#2f7b4a;font-size:22px;font-weight:800}
 .forgot-success h3,.forgot-success h1{margin:0 0 8px}
 .forgot-success p{color:#727b87;font-size:12px;line-height:1.55;margin:0 0 18px}
+
+
+.account-access-card{margin-top:18px;display:grid;grid-template-columns:minmax(0,.85fr) minmax(320px,1.15fr);gap:24px;align-items:center}
+.account-access-card h2{margin:5px 0 6px}
+.account-access-card p{margin:0;color:#7d8794;font-size:12px;line-height:1.55;max-width:620px}
+.auth-methods{display:grid;gap:9px}
+.auth-method-row{display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:center;gap:10px;border:1px solid #1c293b;background:#0e1725;border-radius:11px;padding:10px 11px}
+.auth-method-icon{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:#151f30;border:1px solid #26354b;color:#dce4f1;font-weight:800}
+.auth-method-row strong{display:block;font-size:12px;color:#e5ebf5}
+.auth-method-row small{display:block;color:#718096;font-size:10px;margin-top:3px}
+.auth-methods .alert{margin:0}
+@media(max-width:760px){
+  .account-access-card{grid-template-columns:1fr}
+}
