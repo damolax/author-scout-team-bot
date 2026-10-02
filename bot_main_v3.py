@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import itertools
 import json
 import os
 import re
@@ -561,6 +562,132 @@ async def fast_fetch(u: str):
 
 legacy.search = fast_search
 legacy.fetch = fast_fetch
+
+
+
+def _multi_values(value, limit: int=100) -> list[str]:
+    if isinstance(value,(list,tuple,set)):
+        raw=list(value)
+    else:
+        raw=re.split(r"[,;\n|]+",str(value or ""))
+    out=[];seen=set()
+    for item in raw:
+        v=re.sub(r"\s+"," ",str(item or "").strip())
+        key=v.lower()
+        if not v or key in seen:continue
+        seen.add(key);out.append(v)
+        if len(out)>=limit:break
+    return out
+
+_PRESEARCH_SOURCE_TERMS={
+    "general":"author writer official",
+    "official websites":"author official website",
+    "writers associations":"writers association members authors",
+    "literature centers":"literature center authors writers",
+    "publishers":"publisher authors writers",
+    "independent presses":"independent press authors",
+    "literary agencies":"literary agency authors",
+    "festivals":"literary festival authors speakers",
+    "book fairs":"book fair authors speakers",
+    "directories":"author directory writers directory",
+    "newsletters":"author newsletter writer newsletter",
+    "interviews":"author interview writer interview",
+    "awards":"book award authors finalists",
+    "universities":"creative writing faculty authors",
+    "libraries":"author event library writer",
+}
+_PRESEARCH_ACTIVITY_TERMS={
+    "active now":"active author recent book current project",
+    "active 2026":"2026 author release event newsletter",
+    "recent release":"recent book release author",
+    "current work in progress":"current work in progress author novel",
+    "newsletter activity":"author newsletter recent",
+    "event activity":"author event festival recent",
+    "publisher announcement":"publisher announcement author new book",
+    "award or shortlist":"author shortlist award recent",
+    "media/interview activity":"author interview recent",
+    "book launch":"author book launch recent",
+}
+_PRESEARCH_TEMPLATES=(
+    "{country} {genre} {gender} {position} {publishing} {language} {activity} {source}",
+    "{position} {gender} {genre} writer {country} {publishing} {activity} {source}",
+    "{country} {genre} author {position} {gender} {language} {source} {activity}",
+    "{publishing} {genre} novelist writer {country} {gender} {position} {source}",
+)
+
+def _normalize_presearch(spec: dict) -> dict:
+    raw=spec.get("presearch") if isinstance(spec.get("presearch"),dict) else {}
+    countries=_multi_values(raw.get("countries") or spec.get("country"),40)
+    genres=_multi_values(raw.get("genres") or spec.get("genre"),100)
+    genders=[g.lower() for g in _multi_values(raw.get("genders") or spec.get("gender"),3)
+             if g.lower() in {"male","female","any"}]
+    if not genders or "any" in genders:genders=["any"]
+    positions=_multi_values(raw.get("positions") or raw.get("position"),30)
+    languages=_multi_values(raw.get("languages") or spec.get("language"),30)
+    activities=_multi_values(raw.get("activity_signals") or raw.get("activities"),20)
+    publishing_paths=_multi_values(raw.get("publishing_paths") or raw.get("publishing"),20)
+    source_types=_multi_values(raw.get("source_types") or raw.get("sources"),20)
+    return {
+        "countries":countries,
+        "genres":genres,
+        "genders":genders,
+        "positions":positions,
+        "languages":languages,
+        "activity_signals":activities,
+        "publishing_paths":publishing_paths,
+        "source_types":source_types,
+        "saturation":str(raw.get("saturation") or "").strip(),
+        "require_website":bool(raw.get("require_website",False)),
+        "require_public_email":bool(raw.get("require_public_email",False)),
+    }
+
+def _build_presearch_plan(spec: dict, max_routes: int=SEARCH_PLAN_MAX_ROUTES) -> dict:
+    ps=_normalize_presearch(spec)
+    dimensions=[
+        ps["countries"] or [""],
+        ps["genres"] or [""],
+        ps["genders"] or ["any"],
+        ps["positions"] or [""],
+        ps["languages"] or [""],
+        ps["activity_signals"] or [""],
+        ps["publishing_paths"] or [""],
+        ps["source_types"] or ["general"],
+    ]
+    combo_count=1
+    for values in dimensions:combo_count*=max(1,len(values))
+    total=combo_count*len(_PRESEARCH_TEMPLATES)
+    extra=(spec.get("query") or "").strip()
+    saturation=ps.get("saturation") or ""
+    contact_bits=[]
+    if ps.get("require_website"):contact_bits.append("official website")
+    if ps.get("require_public_email"):contact_bits.append("public professional email contact")
+    contact=" ".join(contact_bits)
+    routes=[];seen=set()
+    for combo in itertools.product(*dimensions):
+        country,genre,gender,position,language,activity,publishing,source=combo
+        activity_term=_PRESEARCH_ACTIVITY_TERMS.get(activity.lower(),activity)
+        source_term=_PRESEARCH_SOURCE_TERMS.get(source.lower(),source)
+        gender_term="" if gender=="any" else gender
+        vals={
+            "country":country,"genre":genre,"gender":gender_term,"position":position,
+            "language":language,"activity":activity_term,"publishing":publishing,"source":source_term,
+        }
+        for template in _PRESEARCH_TEMPLATES:
+            query=template.format(**vals)
+            tail=" ".join(x for x in [saturation,contact,extra] if x)
+            if tail:query+=" "+tail
+            query=re.sub(r"\s+"," ",query).strip()
+            key=query.lower()
+            if not query or key in seen:continue
+            seen.add(key)
+            routes.append({
+                "query":query,"country":country,"genre":genre,"gender":gender,
+                "position":position,"language":language,"activity":activity,
+                "publishing":publishing,"source_type":source,
+            })
+            if len(routes)>=max_routes:
+                return {"routes":routes,"total":total,"generated":len(routes),"capped":total>len(routes),"filters":ps}
+    return {"routes":routes,"total":total,"generated":len(routes),"capped":False,"filters":ps}
 
 
 # ---------------------------------------------------------------------------
@@ -1617,20 +1744,28 @@ def _issue_web_session(account: dict) -> str:
 
 async def handle_web_google_callback(code: str, state: str, error: str=""):
     if error:
-        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?auth_error="+urlencode({"e":error})[2:])
-    p=legacy.serializer.loads(state,max_age=900)
-    if p.get("mode")!="web_login":
-        raise legacy.HTTPException(status_code=400,detail="Invalid login state")
-    async with legacy.httpx.AsyncClient(timeout=30) as c:
-        tr=await c.post(legacy.GOOGLE_TOKEN,data={
-            "client_id":legacy.GOOGLE_CLIENT_ID,"client_secret":legacy.GOOGLE_CLIENT_SECRET,
-            "code":code,"grant_type":"authorization_code","redirect_uri":legacy.GOOGLE_REDIRECT_URI})
-        tr.raise_for_status(); td=tr.json()
-        pr=await c.get(legacy.GOOGLE_USERINFO,headers={"Authorization":f"Bearer {td['access_token']}"})
-        pr.raise_for_status(); profile=pr.json()
-    account=await asyncio.to_thread(_get_or_create_web_account,profile)
-    token=_issue_web_session(account)
-    return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?session="+urlencode({"s":token})[2:])
+        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?auth_error=google_cancelled")
+    try:
+        p=legacy.serializer.loads(state,max_age=900)
+        if p.get("mode")!="web_login":
+            raise ValueError("invalid login state")
+        async with legacy.httpx.AsyncClient(timeout=30) as c:
+            tr=await c.post(legacy.GOOGLE_TOKEN,data={
+                "client_id":legacy.GOOGLE_CLIENT_ID,"client_secret":legacy.GOOGLE_CLIENT_SECRET,
+                "code":code,"grant_type":"authorization_code","redirect_uri":legacy.GOOGLE_REDIRECT_URI})
+            tr.raise_for_status(); td=tr.json()
+            access_token=td.get("access_token") or ""
+            if not access_token:
+                raise RuntimeError("Google returned no access token")
+            pr=await c.get(legacy.GOOGLE_USERINFO,headers={"Authorization":f"Bearer {access_token}"})
+            pr.raise_for_status(); profile=pr.json()
+        account=await asyncio.to_thread(_get_or_create_web_account,profile)
+        token=_issue_web_session(account)
+        print(f"WEB_GOOGLE_LOGIN success=True account={account['id']} email={account['email']}")
+        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL.rstrip("/")+"?session="+token)
+    except Exception as e:
+        print(f"WEB_GOOGLE_LOGIN success=False error={type(e).__name__}: {e}")
+        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?auth_error=google_failed")
 
 
 def _neon_auth_session(session_token: str) -> dict | None:
@@ -1791,6 +1926,16 @@ async def _run_web_research_job(job: dict):
 
         last_progress_at=0.0
         last_milestone=int(job.get("last_notified_count") or 0)
+        search_plan=_build_presearch_plan(spec)
+        search_routes=search_plan.get("routes") or [{
+            "query":(spec.get("query") or "").strip(),
+            "country":spec.get("country") or "",
+            "genre":spec.get("genre") or "",
+            "gender":spec.get("gender") or "any",
+            "language":spec.get("language") or "",
+            "position":"","activity":"","publishing":"","source_type":"general",
+        }]
+        route_offset=max(0,int(job.get("checked") or 0)) % max(1,len(search_routes))
 
         def current_elapsed():
             return min(duration_seconds,elapsed_base+int(max(0,time.monotonic()-resume_started)))
@@ -1829,8 +1974,15 @@ async def _run_web_research_job(job: dict):
 
             cycle+=1
             need=min(50,max(5,cap-accepted))
-            spec["count"]=need
-            found,meta=await fast_scout_authors(spec,need,persist_progress)
+            route=search_routes[(route_offset+cycle-1) % len(search_routes)]
+            cycle_spec=dict(spec)
+            cycle_spec["count"]=need
+            cycle_spec["query"]=route.get("query") or spec.get("query") or ""
+            cycle_spec["country"]=route.get("country") or spec.get("country") or ""
+            cycle_spec["genre"]=route.get("genre") or spec.get("genre") or ""
+            cycle_spec["gender"]=route.get("gender") or spec.get("gender") or "any"
+            cycle_spec["language"]=route.get("language") or spec.get("language") or ""
+            found,meta=await fast_scout_authors(cycle_spec,need,persist_progress)
             raw_results+=int(meta.get("raw_results") or 0)
             candidates=max(candidates,int(meta.get("candidates") or 0))
             checked+=int(meta.get("checked") or 0)
@@ -1854,7 +2006,11 @@ async def _run_web_research_job(job: dict):
                 else:
                     duplicates+=1
 
-            await persist_progress(f"Scout cycle {cycle}: {accepted} unique authors saved")
+            await persist_progress(
+                f"Scout cycle {cycle}: {accepted} unique authors saved · "
+                f"route {((route_offset+cycle-1) % len(search_routes))+1}/{len(search_routes)} · "
+                f"{route.get('country') or 'Any country'} · {route.get('genre') or 'Any genre'}"
+            )
             if stop_requested:break
             await asyncio.sleep(2 if not found or created_this_cycle==0 else 0.35)
 
@@ -2057,6 +2213,7 @@ async def web_create_job(request: legacy.Request):
     body=await request.json()
     query=str(body.get("query") or "").strip()
     filters=body.get("filters") if isinstance(body.get("filters"),dict) else {}
+    presearch=body.get("presearch") if isinstance(body.get("presearch"),dict) else {}
     spec=legacy.parse_find(query) if query else legacy.parse_find("")
     for field in ("name","country","genre","language","year"):
         value=str(filters.get(field) or body.get(field) or "").strip()
@@ -2064,14 +2221,21 @@ async def web_create_job(request: legacy.Request):
             spec[field]=value
     gender=str(filters.get("gender") or body.get("gender") or spec.get("gender") or "any").strip().lower()
     spec["gender"]=gender if gender in {"male","female","any"} else "any"
+    spec["presearch"]=presearch
+    normalized_presearch=_normalize_presearch(spec)
+    spec["presearch"]=normalized_presearch
+    plan=_build_presearch_plan(spec)
+    spec["search_plan_total"]=int(plan["total"])
+    spec["search_plan_generated"]=int(plan["generated"])
     if not spec.get("country"):
         inferred=_infer_country_from_text(query)
         if inferred:
             spec["country"]=inferred
     spec["country"]=_canon_country(spec.get("country") or "")
     spec["strict_country"]=bool(spec.get("country"))
-    if not legacy.find_query_is_specific(spec):
-        raise legacy.HTTPException(status_code=400,detail="Add at least one specific filter such as country, genre, author name, language, gender, or additional instructions.")
+    presearch_specific=any(normalized_presearch.get(k) for k in ("countries","genres","positions","languages","activity_signals","publishing_paths","source_types"))
+    if not legacy.find_query_is_specific(spec) and not presearch_specific:
+        raise legacy.HTTPException(status_code=400,detail="Add at least one specific filter such as country, genre, position, language, gender, activity, source type, or additional instructions.")
     try:
         duration=int(body.get("duration_minutes") or 5)
     except Exception:
@@ -2093,7 +2257,12 @@ async def web_create_job(request: legacy.Request):
     if spec.get("gender") and spec.get("gender")!="any":summary_parts.append("Gender: "+spec["gender"])
     if spec.get("language"):summary_parts.append("Language: "+spec["language"])
     if spec.get("year"):summary_parts.append("Year: "+spec["year"])
+    if normalized_presearch.get("countries"):summary_parts.append(f"Countries: {len(normalized_presearch['countries'])}")
+    if normalized_presearch.get("genres"):summary_parts.append(f"Genres: {len(normalized_presearch['genres'])}")
+    if normalized_presearch.get("positions"):summary_parts.append(f"Positions: {len(normalized_presearch['positions'])}")
+    if normalized_presearch.get("activity_signals"):summary_parts.append(f"Activity routes: {len(normalized_presearch['activity_signals'])}")
     if query:summary_parts.append(query)
+    summary_parts.append(f"Search routes: {plan['total']:,}")
     display_query=" · ".join(summary_parts) or "Structured author Scout"
     with legacy.engine.begin() as c:
         r=c.execute(text("""INSERT INTO web_research_jobs(
@@ -2103,7 +2272,9 @@ async def web_create_job(request: legacy.Request):
             {"t":tid,"u":uid,"q":display_query,"p":json.dumps(spec),"n":requested,"m":duration,"rate":target_rate,"d":t})
         jid=int(r.scalar_one())
     return {"ok":True,"job_id":jid,"status":"queued","requested_count":requested,
-            "duration_minutes":duration,"target_per_hour":target_rate}
+            "duration_minutes":duration,"target_per_hour":target_rate,
+            "search_plan_total":plan["total"],"search_plan_generated":plan["generated"],
+            "search_plan_capped":plan["capped"],"search_plan_samples":[r["query"] for r in plan["routes"][:5]]}
 
 @app.get("/api/v1/research/jobs")
 async def web_jobs(request: legacy.Request, limit: int=30):
@@ -3180,11 +3351,13 @@ async def enhanced_handle(update: dict):
                 if not tm:
                     return await legacy.send(chat,"Join or create a team first.")
                 token=legacy.serializer.dumps({"scope":"web","team_id":int(tm["id"]),"uid":int(uid)})
+                direct_url=AUTHOR_SCOUT_WEB_URL.rstrip("/")+"?session="+token
                 return await legacy.send(chat,
-                    "<b>🔐 Author Scout Web Access Key</b>\n\n"
-                    "Paste this key into the web dashboard login screen. It is signed to your team and expires automatically.\n\n"
+                    "<b>🔐 Author Scout Web Access</b>\n\n"
+                    "Use the button below for one-tap sign in, or paste the key manually on the login screen.\n\n"
                     f"<code>{legacy.esc(token)}</code>\n\n"
-                    "Keep it private. Use /webkey again anytime to generate another valid signed key.")
+                    "This signed access is private to your current workspace and expires automatically.",
+                    {"inline_keyboard":[[{"text":"🌐 Open Author Scout","url":direct_url}]]})
             if cmd == "/indexstatus":
                 return await show_index_status(chat)
             if cmd == "/scoutstatus":

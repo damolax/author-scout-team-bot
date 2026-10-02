@@ -436,10 +436,152 @@ function Dashboard({ keyValue, session, active }) {
   )
 }
 
+const COUNTRY_SUGGESTIONS = [
+  'United States','United Kingdom','Canada','Australia','France','Germany','Austria','United Arab Emirates',
+  'New Zealand','Spain','Iceland','Saudi Arabia','Portugal','Italy','Netherlands','Belgium','Switzerland',
+  'Sweden','Norway','Denmark','Finland','Ireland','India','Japan','South Korea','Singapore','South Africa',
+  'Nigeria','Ghana','Kenya','Mexico','Brazil','Argentina','Chile','Colombia','Poland','Czech Republic',
+  'Greece','Romania','Hungary','Croatia','Serbia','Turkey','Israel','Egypt','Morocco','Qatar'
+]
+
+const GENRE_SUGGESTIONS = [
+  'Literary Fiction','Contemporary Fiction','Historical Fiction','Commercial Fiction','Upmarket Fiction',
+  'Women’s Fiction','Family Saga','Coming of Age','Romance','Contemporary Romance','Historical Romance',
+  'Romantic Comedy','Romantic Suspense','Paranormal Romance','Fantasy Romance','Romantasy','Dark Romance',
+  'Inspirational Romance','Mystery','Cozy Mystery','Historical Mystery','Police Procedural','Detective Fiction',
+  'Crime Fiction','Psychological Thriller','Domestic Thriller','Legal Thriller','Political Thriller',
+  'Techno Thriller','Medical Thriller','Espionage Thriller','Action Thriller','Suspense','Horror',
+  'Gothic Horror','Psychological Horror','Supernatural Horror','Folk Horror','Dark Fiction','Fantasy',
+  'Epic Fantasy','High Fantasy','Low Fantasy','Urban Fantasy','Dark Fantasy','Portal Fantasy','Sword and Sorcery',
+  'Mythic Fantasy','Fairy Tale Retelling','Science Fiction','Hard Science Fiction','Soft Science Fiction',
+  'Space Opera','Cyberpunk','Solarpunk','Climate Fiction','Dystopian Fiction','Post Apocalyptic Fiction',
+  'Alternate History','Time Travel Fiction','Speculative Fiction','Magical Realism','Adventure Fiction','Western',
+  'Satire','Humor Fiction','Absurdist Fiction','Experimental Fiction','Short Stories','Flash Fiction','Novella',
+  'Poetry','Contemporary Poetry','Spoken Word Poetry','Narrative Poetry','Haiku','Christian Fiction',
+  'Inspirational Fiction','Faith Based Fiction','LGBTQ+ Fiction','African Fiction','Caribbean Fiction',
+  'Diaspora Fiction','Indigenous Fiction','Young Adult','YA Fantasy','YA Romance','YA Thriller','YA Contemporary',
+  'Middle Grade','Middle Grade Fantasy','Middle Grade Adventure','Children’s Fiction','Picture Books',
+  'Early Reader','Chapter Books','Graphic Novel','Comics','Manga','Memoir','Autobiography','Biography',
+  'Personal Essay','Narrative Nonfiction','True Crime','History','Military History','Cultural History',
+  'Art History','Politics and Current Affairs','Journalism','Social Commentary','Psychology','Philosophy',
+  'Religion and Spirituality','Christian Nonfiction','Self Help','Personal Development','Productivity',
+  'Business','Entrepreneurship','Leadership','Management','Marketing','Sales','Career Development',
+  'Personal Finance','Investing','Economics','Technology','Artificial Intelligence','Computer Science',
+  'Popular Science','Nature Writing','Environment','Travel Writing','Food Writing','Cookbook','Health and Wellness',
+  'Fitness','Parenting','Relationships','Education','Academic Writing','Reference','How To','Craft and Hobbies',
+  'Sports','Music','Film and Media','Photography','Architecture','Design','Humor Nonfiction'
+]
+
+const POSITION_SUGGESTIONS = [
+  'debut author','emerging author','early career author','mid-list author','established non-celebrity author',
+  'independent author','self-published author','traditionally published author','hybrid author','small press author',
+  'novelist','poet','memoirist','essayist','children’s author','young adult author','academic author',
+  'business author','thought leadership author','genre specialist','award-listed emerging author'
+]
+
+const LANGUAGE_SUGGESTIONS = [
+  'English','Spanish','French','German','Arabic','Portuguese','Italian','Dutch','Catalan','Swedish',
+  'Norwegian','Danish','Finnish','Icelandic','Polish','Turkish','Hebrew','Hindi','Japanese','Korean'
+]
+
+const ACTIVITY_OPTIONS = [
+  'active 2026','recent release','current work in progress','newsletter activity','event activity',
+  'publisher announcement','award or shortlist','media/interview activity','book launch'
+]
+
+const PUBLISHING_OPTIONS = [
+  'self-published','independent press','traditional publisher','hybrid published','small press','unagented'
+]
+
+const SOURCE_OPTIONS = [
+  'general','official websites','writers associations','literature centers','publishers','independent presses',
+  'literary agencies','festivals','book fairs','directories','newsletters','interviews','awards','universities','libraries'
+]
+
+function TagPicker({ label, values, onChange, suggestions=[], placeholder='', helper='', max=100, allowAll=false }) {
+  const [draft, setDraft] = useState('')
+  const listId = 'tag-' + label.toLowerCase().replace(/[^a-z0-9]+/g,'-')
+  const add = (raw) => {
+    const incoming=String(raw || '').split(/[,;\n|]+/).map(x => x.trim()).filter(Boolean)
+    if (!incoming.length) return
+    const seen=new Set(values.map(v => String(v).toLowerCase()))
+    const next=[...values]
+    for (const item of incoming) {
+      if (next.length >= max) break
+      const key=item.toLowerCase()
+      if (!seen.has(key)) { seen.add(key); next.push(item) }
+    }
+    onChange(next)
+    setDraft('')
+  }
+  const remove = (value) => onChange(values.filter(v => v !== value))
+  return (
+    <div className="field tag-picker">
+      <div className="tag-label-row">
+        <label>{label}</label>
+        {allowAll && suggestions.length > 0 && <button type="button" className="mini-link" onClick={() => onChange(suggestions.slice(0,max))}>
+          Use all {Math.min(max,suggestions.length)}
+        </button>}
+      </div>
+      {!!values.length && <div className="tag-list">
+        {values.map(v => <button key={v} type="button" className="tag-chip" onClick={() => remove(v)} title="Remove">
+          {v}<span>×</span>
+        </button>)}
+      </div>}
+      <div className="tag-input-row">
+        <input
+          list={listId}
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ',') {
+              e.preventDefault()
+              add(draft)
+            }
+          }}
+          onBlur={() => { if (draft.trim()) add(draft) }}
+          placeholder={placeholder}
+        />
+        <button type="button" className="button button-quiet tag-add" onMouseDown={e => e.preventDefault()} onClick={() => add(draft)}>Add</button>
+      </div>
+      <datalist id={listId}>{suggestions.map(x => <option key={x} value={x} />)}</datalist>
+      {helper && <small className="field-helper">{helper}</small>}
+    </div>
+  )
+}
+
+function TogglePills({ label, values, selected, onChange, helper='' }) {
+  const toggle = (value) => onChange(selected.includes(value) ? selected.filter(x => x !== value) : [...selected,value])
+  return (
+    <div className="field toggle-field">
+      <label>{label}</label>
+      <div className="toggle-pills">
+        {values.map(value => <button key={value} type="button"
+          className={selected.includes(value) ? 'toggle-pill active' : 'toggle-pill'}
+          onClick={() => toggle(value)}>{value}</button>)}
+      </div>
+      {helper && <small className="field-helper">{helper}</small>}
+    </div>
+  )
+}
+
 function Research({ keyValue, active }) {
   const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState({ name:'', country:'', genre:'', gender:'any', language:'', year:'' })
-  const [showMoreFilters, setShowMoreFilters] = useState(false)
+  const [filters, setFilters] = useState({ name:'', year:'' })
+  const [presearch, setPresearch] = useState({
+    countries:[],
+    genres:[],
+    genders:['any'],
+    positions:[],
+    languages:[],
+    activity_signals:['active 2026'],
+    publishing_paths:[],
+    source_types:['general'],
+    saturation:'low saturation emerging mid-list non-celebrity',
+    require_website:false,
+    require_public_email:false,
+  })
+  const [showMoreFilters, setShowMoreFilters] = useState(true)
   const [duration, setDuration] = useState(10)
   const [jobs, setJobs] = useState([])
   const [selected, setSelected] = useState(null)
@@ -447,6 +589,23 @@ function Research({ keyValue, active }) {
   const [stoppingId, setStoppingId] = useState(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+
+  const setPre = (key,value) => setPresearch(prev => ({...prev,[key]:value}))
+  const setFilter = (key,value) => setFilters(prev => ({...prev,[key]:value}))
+
+  const genderRouteCount = presearch.genders.includes('any') || !presearch.genders.length ? 1 : presearch.genders.length
+  const dimensionCount = [
+    presearch.countries.length || 1,
+    presearch.genres.length || 1,
+    genderRouteCount,
+    presearch.positions.length || 1,
+    presearch.languages.length || 1,
+    presearch.activity_signals.length || 1,
+    presearch.publishing_paths.length || 1,
+    presearch.source_types.length || 1,
+  ].reduce((a,b) => a*b,1)
+  const potentialRoutes = dimensionCount * 4
+  const routesUsed = Math.min(5000,potentialRoutes)
 
   const loadJobs = useCallback(async () => {
     try {
@@ -462,8 +621,24 @@ function Research({ keyValue, active }) {
 
   usePolling(loadJobs, 4000, active)
 
-  const hasScoutCriteria = query.trim() || Object.entries(filters).some(([k,v]) => k !== 'gender' && String(v || '').trim()) || filters.gender !== 'any'
-  const setFilter = (key, value) => setFilters(prev => ({ ...prev, [key]: value }))
+  const hasScoutCriteria = query.trim()
+    || String(filters.name || '').trim()
+    || String(filters.year || '').trim()
+    || presearch.countries.length
+    || presearch.genres.length
+    || presearch.positions.length
+    || presearch.languages.length
+    || presearch.activity_signals.length
+    || presearch.publishing_paths.length
+    || presearch.source_types.some(x => x !== 'general')
+    || presearch.genders.some(x => x !== 'any')
+
+  const setGenderMode = (value) => {
+    if (value === 'any') { setPre('genders',['any']); return }
+    const current=presearch.genders.filter(x => x !== 'any')
+    const next=current.includes(value) ? current.filter(x => x !== value) : [...current,value]
+    setPre('genders',next.length ? next : ['any'])
+  }
 
   const create = async (e) => {
     e.preventDefault()
@@ -472,8 +647,9 @@ function Research({ keyValue, active }) {
     try {
       const d = await request('/api/v1/research/jobs', keyValue, {
         method: 'POST',
-        body: JSON.stringify({ query: query.trim(), filters, duration_minutes: Number(duration) || 10 })
+        body: JSON.stringify({ query: query.trim(), filters, presearch, duration_minutes: Number(duration) || 10 })
       })
+      setNotice('Scout queued with ' + Number(d.search_plan_total || potentialRoutes).toLocaleString() + ' possible search routes.')
       setQuery('')
       await loadJobs()
       const detail = await request('/api/v1/research/jobs/' + d.job_id, keyValue)
@@ -505,7 +681,7 @@ function Research({ keyValue, active }) {
         <div>
           <div className="eyebrow">Discovery</div>
           <h1>Scout</h1>
-          <p>Find authors with strict filters. Long Scouts keep running in the background.</p>
+          <p>Build a diversified search plan before the Scout starts. The worker rotates through combinations instead of repeating one query.</p>
         </div>
       </div>
 
@@ -513,52 +689,127 @@ function Research({ keyValue, active }) {
         <form onSubmit={create}>
           <div className="filter-head">
             <div>
-              <label>Scout filters</label>
-              <p>Country is strict. Other filters narrow discovery.</p>
+              <label>Pre-search builder</label>
+              <p>Combine multiple countries, genres, genders, positions and discovery signals.</p>
             </div>
-            <span className="strict-badge">Strict country</span>
+            <div className="route-counter">
+              <strong>{potentialRoutes.toLocaleString()}</strong>
+              <span>possible search prompts</span>
+              {potentialRoutes > 5000 && <small>First 5,000 diversified routes used per Scout</small>}
+            </div>
           </div>
 
-          <div className="scout-filter-grid">
-            <div className="field">
-              <label>Country</label>
-              <input list="scout-countries" value={filters.country} onChange={e => setFilter('country', e.target.value)} placeholder="Spain" />
-              <datalist id="scout-countries">
-                {['United States','United Kingdom','Canada','Australia','France','Germany','Austria','United Arab Emirates','New Zealand','Spain','Iceland','Saudi Arabia','Portugal','Italy','Netherlands','Belgium','Switzerland','Sweden','Norway','Denmark','Finland','Ireland','India','Japan','South Korea','Singapore','South Africa','Nigeria','Ghana','Kenya','Mexico','Brazil','Argentina','Chile','Colombia'].map(x => <option key={x} value={x} />)}
-              </datalist>
+          <div className="presearch-grid">
+            <TagPicker
+              label="Countries"
+              values={presearch.countries}
+              onChange={v => setPre('countries',v)}
+              suggestions={COUNTRY_SUGGESTIONS}
+              placeholder="Add country, then Enter"
+              helper="Add one or many. Country remains a strict market filter."
+              max={40}
+            />
+            <TagPicker
+              label="Genres"
+              values={presearch.genres}
+              onChange={v => setPre('genres',v)}
+              suggestions={GENRE_SUGGESTIONS}
+              placeholder="Add genre, then Enter"
+              helper={GENRE_SUGGESTIONS.length + ' genre suggestions are available. You can also type your own.'}
+              max={100}
+              allowAll
+            />
+            <TagPicker
+              label="Position / career stage"
+              values={presearch.positions}
+              onChange={v => setPre('positions',v)}
+              suggestions={POSITION_SUGGESTIONS}
+              placeholder="e.g. debut author, mid-list author"
+              helper="Free input is supported, so you can define any author position you want."
+              max={30}
+            />
+            <TagPicker
+              label="Languages"
+              values={presearch.languages}
+              onChange={v => setPre('languages',v)}
+              suggestions={LANGUAGE_SUGGESTIONS}
+              placeholder="English, Spanish, French…"
+              max={30}
+            />
+          </div>
+
+          <div className="gender-builder">
+            <label>Gender routes</label>
+            <div className="toggle-pills">
+              <button type="button" className={presearch.genders.includes('any') ? 'toggle-pill active' : 'toggle-pill'} onClick={() => setGenderMode('any')}>Any</button>
+              <button type="button" className={presearch.genders.includes('male') ? 'toggle-pill active' : 'toggle-pill'} onClick={() => setGenderMode('male')}>Male</button>
+              <button type="button" className={presearch.genders.includes('female') ? 'toggle-pill active' : 'toggle-pill'} onClick={() => setGenderMode('female')}>Female</button>
             </div>
-            <div className="field">
-              <label>Genre</label>
-              <input value={filters.genre} onChange={e => setFilter('genre', e.target.value)} placeholder="Historical fiction" />
-            </div>
-            <div className="field">
-              <label>Gender</label>
-              <select value={filters.gender} onChange={e => setFilter('gender', e.target.value)}>
-                <option value="any">Any</option>
-                <option value="male">Male</option>
-                <option value="female">Female</option>
-              </select>
-            </div>
+            <small className="field-helper">Select Male + Female to generate separate search routes for each.</small>
           </div>
 
           <button type="button" className="filter-toggle" onClick={() => setShowMoreFilters(v => !v)}>
-            {showMoreFilters ? 'Hide extra filters' : 'More filters'} <span>{showMoreFilters ? '−' : '+'}</span>
+            {showMoreFilters ? 'Hide route expansion filters' : 'More route expansion filters'} <span>{showMoreFilters ? '−' : '+'}</span>
           </button>
 
-          {showMoreFilters && <div className="scout-filter-grid extra">
-            <div className="field">
-              <label>Name contains</label>
-              <input value={filters.name} onChange={e => setFilter('name', e.target.value)} placeholder="Optional author name" />
+          {showMoreFilters && <div className="route-expansion">
+            <TogglePills label="Current activity signals" values={ACTIVITY_OPTIONS}
+              selected={presearch.activity_signals} onChange={v => setPre('activity_signals',v)}
+              helper="Each selected activity signal creates additional search combinations." />
+            <TogglePills label="Publishing path" values={PUBLISHING_OPTIONS}
+              selected={presearch.publishing_paths} onChange={v => setPre('publishing_paths',v)} />
+            <TogglePills label="Discovery source routes" values={SOURCE_OPTIONS}
+              selected={presearch.source_types} onChange={v => setPre('source_types',v)}
+              helper="This helps the Scout move beyond generic web results into associations, presses, festivals, directories and other source types." />
+
+            <div className="scout-filter-grid extra">
+              <div className="field">
+                <label>Name contains</label>
+                <input value={filters.name} onChange={e => setFilter('name', e.target.value)} placeholder="Optional author name" />
+              </div>
+              <div className="field">
+                <label>Activity year</label>
+                <input value={filters.year} onChange={e => setFilter('year', e.target.value)} placeholder="2026" />
+              </div>
+              <div className="field">
+                <label>Saturation / market position</label>
+                <input value={presearch.saturation} onChange={e => setPre('saturation',e.target.value)}
+                  placeholder="low saturation emerging mid-list non-celebrity" />
+              </div>
             </div>
-            <div className="field">
-              <label>Language</label>
-              <input value={filters.language} onChange={e => setFilter('language', e.target.value)} placeholder="Spanish" />
-            </div>
-            <div className="field">
-              <label>Activity year</label>
-              <input value={filters.year} onChange={e => setFilter('year', e.target.value)} placeholder="2026" />
+
+            <div className="requirement-row">
+              <label className="check-card">
+                <input type="checkbox" checked={presearch.require_website} onChange={e => setPre('require_website',e.target.checked)} />
+                <span><strong>Website route signal</strong><small>Add official-website language to discovery prompts.</small></span>
+              </label>
+              <label className="check-card">
+                <input type="checkbox" checked={presearch.require_public_email} onChange={e => setPre('require_public_email',e.target.checked)} />
+                <span><strong>Public email route signal</strong><small>Add public professional contact language to discovery prompts.</small></span>
+              </label>
             </div>
           </div>}
+
+          <div className="search-plan-preview">
+            <div>
+              <span className="kicker">Generated search plan</span>
+              <strong>{routesUsed.toLocaleString()} diversified routes ready</strong>
+              <small>
+                {Math.max(1,presearch.countries.length)} country × {Math.max(1,presearch.genres.length)} genre × {genderRouteCount} gender × {Math.max(1,presearch.positions.length)} position × {Math.max(1,presearch.activity_signals.length)} activity × 4 phrasing patterns
+              </small>
+            </div>
+            <div className="route-example">
+              <span>Example route</span>
+              <code>{[
+                presearch.countries[0] || 'Canada',
+                presearch.genres[0] || 'Historical Fiction',
+                presearch.genders.includes('any') ? '' : (presearch.genders[0] || ''),
+                presearch.positions[0] || 'emerging author',
+                presearch.activity_signals[0] || 'active 2026',
+                presearch.source_types[0] || 'writers associations'
+              ].filter(Boolean).join(' · ')}</code>
+            </div>
+          </div>
 
           <div className="field scout-instructions">
             <label>Additional instructions <span>optional</span></label>
@@ -566,7 +817,7 @@ function Research({ keyValue, active }) {
               rows="3"
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Example: emerging or mid-list, active recently, avoid celebrity authors, low outreach saturation"
+              placeholder="Example: avoid celebrity authors, prefer authors with a current book or project, exclude publisher-only contacts"
             />
           </div>
           <div className="compose-row">
@@ -587,7 +838,7 @@ function Research({ keyValue, active }) {
                 <option value="10080">7 days</option>
               </select>
             </div>
-            <div className="compose-hint">Long Scouts continue in the background.</div>
+            <div className="compose-hint">Routes are rotated, deduplicated and reused intelligently during the Scout.</div>
             <button className="button button-primary" disabled={creating || !hasScoutCriteria}>
               {creating ? 'Starting…' : 'Start Scout'}
             </button>
@@ -601,7 +852,7 @@ function Research({ keyValue, active }) {
       <div className="research-layout">
         <div className="panel jobs-panel">
           <div className="panel-head"><div><span className="kicker">Live queue</span><h2>Scout jobs</h2></div><button className="button button-quiet" onClick={loadJobs}>Refresh</button></div>
-          {!jobs.length ? <Empty title="No Scout jobs" body="Start one above." /> :
+          {!jobs.length ? <Empty title="No Scout jobs" body="Build a search plan and start one above." /> :
             <div className="job-list">
               {jobs.map(job => (
                 <button key={job.id} className={'job-row ' + (selected?.job?.id === job.id ? 'active' : '')} onClick={() => openJob(job.id)}>
@@ -1103,17 +1354,25 @@ function AppCore() {
   const [loginStatus, setLoginStatus] = useState('')
   const [tab, setTab] = useState('dashboard')
 
-  const verify = useCallback(async (key) => {
-    setChecking(true); setLoginError('')
+  const verify = useCallback(async (rawKey) => {
+    const key=String(rawKey || '').replace(/\s+/g,'').trim()
+    if (!key) {
+      setLoginError('Paste a valid Author Scout access key.')
+      return
+    }
+    setChecking(true); setLoginError(''); setLoginStatus('Opening your workspace…')
     try {
       const s = await request('/api/v1/session', key)
       localStorage.setItem('authorScoutSession', key)
       setKeyValue(key)
-      setChecking(false)
       setSession(s)
+      setLoginStatus('')
     } catch(e) {
       localStorage.removeItem('authorScoutSession')
-      setKeyValue(''); setSession(null); setLoginError(e.message)
+      setKeyValue('')
+      setSession(null)
+      setLoginError(e?.message || 'That access key could not be verified.')
+      setLoginStatus('')
     } finally { setChecking(false) }
   }, [])
   const exchangeManagedAuth = useCallback(async (authResult = null) => {
@@ -1128,6 +1387,8 @@ function AppCore() {
         token=sessionTokenFrom(current)
       }
       if (!token) throw new Error('Signed in, but no secure session token was returned. Please try again.')
+      setLoginStatus('Starting your Author Scout workspace…')
+      await waitForBackend()
       const d=await request('/api/v1/auth/neon-session','',{
         method:'POST',
         body:JSON.stringify({ session_token: token })
@@ -1171,12 +1432,15 @@ function AppCore() {
     setLoginError('')
     setLoginStatus('Opening Google…')
     try {
+      // Clear only the old Author Scout app session. Better Auth will establish the new Google identity.
+      localStorage.removeItem('authorScoutSession')
+      setKeyValue('')
       const result=await authClient.signIn.social({
         provider:'google',
         callbackURL:window.location.origin
       })
       if (result?.error) throw new Error(result.error.message || 'Google sign-in failed')
-      // Most social sign-ins redirect. If Neon returns a session directly, handle it too.
+      // Most social sign-ins redirect. If a session is returned directly, exchange it now.
       if (sessionTokenFrom(result)) await exchangeManagedAuth(result)
     } catch(e) {
       setLoginError(e?.message || 'Google sign-in failed.')
@@ -1211,32 +1475,44 @@ function AppCore() {
   useEffect(() => {
     let cancelled=false
     const boot=async () => {
-      const params = new URLSearchParams(window.location.search)
-      const incoming = params.get('session')
-      const authError = params.get('auth_error')
+      const params=new URLSearchParams(window.location.search)
+      const incoming=params.get('session')
+      const authError=params.get('auth_error')
+
+      // Backend Google login returns a fresh signed Author Scout session.
       if (incoming) {
-        localStorage.setItem('authorScoutSession', incoming)
-        setKeyValue(incoming)
-        window.history.replaceState({}, document.title, window.location.pathname)
+        window.history.replaceState({},document.title,window.location.pathname)
         await verify(incoming)
         return
       }
       if (authError) {
-        setLoginError('Sign-in was cancelled or could not be completed.')
-        window.history.replaceState({}, document.title, window.location.pathname)
+        localStorage.removeItem('authorScoutSession')
+        setKeyValue('')
+        setLoginError('Google sign-in was cancelled or could not be completed.')
+        window.history.replaceState({},document.title,window.location.pathname)
         return
       }
-      if (keyValue && !session) {
-        await verify(keyValue)
-        return
-      }
-      // Handles return from managed Google Auth, or an existing Neon Auth browser session.
+
+      // Email/password login may leave a valid managed Neon Auth session.
+      // Prefer that fresh identity before any stale Author Scout local session.
       try {
         const current=await authClient.getSession()
         if (!cancelled && !current?.error && sessionTokenFrom(current)) {
-          await exchangeManagedAuth(current)
+          try {
+            await exchangeManagedAuth(current)
+            return
+          } catch {
+            // Continue to stored Author Scout session if managed exchange fails.
+          }
         }
       } catch {}
+
+      const stored=localStorage.getItem('authorScoutSession') || ''
+      if (!cancelled && stored) {
+        await verify(stored)
+      } else if (!cancelled) {
+        setChecking(false)
+      }
     }
     boot()
     return () => { cancelled=true }
