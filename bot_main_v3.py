@@ -1918,6 +1918,16 @@ async def _run_web_research_job(job: dict):
 
         last_progress_at=0.0
         last_milestone=int(job.get("last_notified_count") or 0)
+        search_plan=_build_presearch_plan(spec)
+        search_routes=search_plan.get("routes") or [{
+            "query":(spec.get("query") or "").strip(),
+            "country":spec.get("country") or "",
+            "genre":spec.get("genre") or "",
+            "gender":spec.get("gender") or "any",
+            "language":spec.get("language") or "",
+            "position":"","activity":"","publishing":"","source_type":"general",
+        }]
+        route_offset=max(0,int(job.get("checked") or 0)) % max(1,len(search_routes))
 
         def current_elapsed():
             return min(duration_seconds,elapsed_base+int(max(0,time.monotonic()-resume_started)))
@@ -1956,8 +1966,15 @@ async def _run_web_research_job(job: dict):
 
             cycle+=1
             need=min(50,max(5,cap-accepted))
-            spec["count"]=need
-            found,meta=await fast_scout_authors(spec,need,persist_progress)
+            route=search_routes[(route_offset+cycle-1) % len(search_routes)]
+            cycle_spec=dict(spec)
+            cycle_spec["count"]=need
+            cycle_spec["query"]=route.get("query") or spec.get("query") or ""
+            cycle_spec["country"]=route.get("country") or spec.get("country") or ""
+            cycle_spec["genre"]=route.get("genre") or spec.get("genre") or ""
+            cycle_spec["gender"]=route.get("gender") or spec.get("gender") or "any"
+            cycle_spec["language"]=route.get("language") or spec.get("language") or ""
+            found,meta=await fast_scout_authors(cycle_spec,need,persist_progress)
             raw_results+=int(meta.get("raw_results") or 0)
             candidates=max(candidates,int(meta.get("candidates") or 0))
             checked+=int(meta.get("checked") or 0)
@@ -1981,7 +1998,11 @@ async def _run_web_research_job(job: dict):
                 else:
                     duplicates+=1
 
-            await persist_progress(f"Scout cycle {cycle}: {accepted} unique authors saved")
+            await persist_progress(
+                f"Scout cycle {cycle}: {accepted} unique authors saved · "
+                f"route {((route_offset+cycle-1) % len(search_routes))+1}/{len(search_routes)} · "
+                f"{route.get('country') or 'Any country'} · {route.get('genre') or 'Any genre'}"
+            )
             if stop_requested:break
             await asyncio.sleep(2 if not found or created_this_cycle==0 else 0.35)
 
@@ -2184,6 +2205,7 @@ async def web_create_job(request: legacy.Request):
     body=await request.json()
     query=str(body.get("query") or "").strip()
     filters=body.get("filters") if isinstance(body.get("filters"),dict) else {}
+    presearch=body.get("presearch") if isinstance(body.get("presearch"),dict) else {}
     spec=legacy.parse_find(query) if query else legacy.parse_find("")
     for field in ("name","country","genre","language","year"):
         value=str(filters.get(field) or body.get(field) or "").strip()
@@ -2191,14 +2213,21 @@ async def web_create_job(request: legacy.Request):
             spec[field]=value
     gender=str(filters.get("gender") or body.get("gender") or spec.get("gender") or "any").strip().lower()
     spec["gender"]=gender if gender in {"male","female","any"} else "any"
+    spec["presearch"]=presearch
+    normalized_presearch=_normalize_presearch(spec)
+    spec["presearch"]=normalized_presearch
+    plan=_build_presearch_plan(spec)
+    spec["search_plan_total"]=int(plan["total"])
+    spec["search_plan_generated"]=int(plan["generated"])
     if not spec.get("country"):
         inferred=_infer_country_from_text(query)
         if inferred:
             spec["country"]=inferred
     spec["country"]=_canon_country(spec.get("country") or "")
     spec["strict_country"]=bool(spec.get("country"))
-    if not legacy.find_query_is_specific(spec):
-        raise legacy.HTTPException(status_code=400,detail="Add at least one specific filter such as country, genre, author name, language, gender, or additional instructions.")
+    presearch_specific=any(normalized_presearch.get(k) for k in ("countries","genres","positions","languages","activity_signals","publishing_paths","source_types"))
+    if not legacy.find_query_is_specific(spec) and not presearch_specific:
+        raise legacy.HTTPException(status_code=400,detail="Add at least one specific filter such as country, genre, position, language, gender, activity, source type, or additional instructions.")
     try:
         duration=int(body.get("duration_minutes") or 5)
     except Exception:
@@ -2220,7 +2249,12 @@ async def web_create_job(request: legacy.Request):
     if spec.get("gender") and spec.get("gender")!="any":summary_parts.append("Gender: "+spec["gender"])
     if spec.get("language"):summary_parts.append("Language: "+spec["language"])
     if spec.get("year"):summary_parts.append("Year: "+spec["year"])
+    if normalized_presearch.get("countries"):summary_parts.append(f"Countries: {len(normalized_presearch['countries'])}")
+    if normalized_presearch.get("genres"):summary_parts.append(f"Genres: {len(normalized_presearch['genres'])}")
+    if normalized_presearch.get("positions"):summary_parts.append(f"Positions: {len(normalized_presearch['positions'])}")
+    if normalized_presearch.get("activity_signals"):summary_parts.append(f"Activity routes: {len(normalized_presearch['activity_signals'])}")
     if query:summary_parts.append(query)
+    summary_parts.append(f"Search routes: {plan['total']:,}")
     display_query=" · ".join(summary_parts) or "Structured author Scout"
     with legacy.engine.begin() as c:
         r=c.execute(text("""INSERT INTO web_research_jobs(
@@ -2230,7 +2264,9 @@ async def web_create_job(request: legacy.Request):
             {"t":tid,"u":uid,"q":display_query,"p":json.dumps(spec),"n":requested,"m":duration,"rate":target_rate,"d":t})
         jid=int(r.scalar_one())
     return {"ok":True,"job_id":jid,"status":"queued","requested_count":requested,
-            "duration_minutes":duration,"target_per_hour":target_rate}
+            "duration_minutes":duration,"target_per_hour":target_rate,
+            "search_plan_total":plan["total"],"search_plan_generated":plan["generated"],
+            "search_plan_capped":plan["capped"],"search_plan_samples":[r["query"] for r in plan["routes"][:5]]}
 
 @app.get("/api/v1/research/jobs")
 async def web_jobs(request: legacy.Request, limit: int=30):
