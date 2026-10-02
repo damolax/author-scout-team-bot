@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import itertools
 import json
 import os
 import re
@@ -561,6 +562,132 @@ async def fast_fetch(u: str):
 
 legacy.search = fast_search
 legacy.fetch = fast_fetch
+
+
+
+def _multi_values(value, limit: int=100) -> list[str]:
+    if isinstance(value,(list,tuple,set)):
+        raw=list(value)
+    else:
+        raw=re.split(r"[,;\n|]+",str(value or ""))
+    out=[];seen=set()
+    for item in raw:
+        v=re.sub(r"\s+"," ",str(item or "").strip())
+        key=v.lower()
+        if not v or key in seen:continue
+        seen.add(key);out.append(v)
+        if len(out)>=limit:break
+    return out
+
+_PRESEARCH_SOURCE_TERMS={
+    "general":"author writer official",
+    "official websites":"author official website",
+    "writers associations":"writers association members authors",
+    "literature centers":"literature center authors writers",
+    "publishers":"publisher authors writers",
+    "independent presses":"independent press authors",
+    "literary agencies":"literary agency authors",
+    "festivals":"literary festival authors speakers",
+    "book fairs":"book fair authors speakers",
+    "directories":"author directory writers directory",
+    "newsletters":"author newsletter writer newsletter",
+    "interviews":"author interview writer interview",
+    "awards":"book award authors finalists",
+    "universities":"creative writing faculty authors",
+    "libraries":"author event library writer",
+}
+_PRESEARCH_ACTIVITY_TERMS={
+    "active now":"active author recent book current project",
+    "active 2026":"2026 author release event newsletter",
+    "recent release":"recent book release author",
+    "current work in progress":"current work in progress author novel",
+    "newsletter activity":"author newsletter recent",
+    "event activity":"author event festival recent",
+    "publisher announcement":"publisher announcement author new book",
+    "award or shortlist":"author shortlist award recent",
+    "media/interview activity":"author interview recent",
+    "book launch":"author book launch recent",
+}
+_PRESEARCH_TEMPLATES=(
+    "{country} {genre} {gender} {position} {publishing} {language} {activity} {source}",
+    "{position} {gender} {genre} writer {country} {publishing} {activity} {source}",
+    "{country} {genre} author {position} {gender} {language} {source} {activity}",
+    "{publishing} {genre} novelist writer {country} {gender} {position} {source}",
+)
+
+def _normalize_presearch(spec: dict) -> dict:
+    raw=spec.get("presearch") if isinstance(spec.get("presearch"),dict) else {}
+    countries=_multi_values(raw.get("countries") or spec.get("country"),40)
+    genres=_multi_values(raw.get("genres") or spec.get("genre"),100)
+    genders=[g.lower() for g in _multi_values(raw.get("genders") or spec.get("gender"),3)
+             if g.lower() in {"male","female","any"}]
+    if not genders or "any" in genders:genders=["any"]
+    positions=_multi_values(raw.get("positions") or raw.get("position"),30)
+    languages=_multi_values(raw.get("languages") or spec.get("language"),30)
+    activities=_multi_values(raw.get("activity_signals") or raw.get("activities"),20)
+    publishing_paths=_multi_values(raw.get("publishing_paths") or raw.get("publishing"),20)
+    source_types=_multi_values(raw.get("source_types") or raw.get("sources"),20)
+    return {
+        "countries":countries,
+        "genres":genres,
+        "genders":genders,
+        "positions":positions,
+        "languages":languages,
+        "activity_signals":activities,
+        "publishing_paths":publishing_paths,
+        "source_types":source_types,
+        "saturation":str(raw.get("saturation") or "").strip(),
+        "require_website":bool(raw.get("require_website",False)),
+        "require_public_email":bool(raw.get("require_public_email",False)),
+    }
+
+def _build_presearch_plan(spec: dict, max_routes: int=SEARCH_PLAN_MAX_ROUTES) -> dict:
+    ps=_normalize_presearch(spec)
+    dimensions=[
+        ps["countries"] or [""],
+        ps["genres"] or [""],
+        ps["genders"] or ["any"],
+        ps["positions"] or [""],
+        ps["languages"] or [""],
+        ps["activity_signals"] or [""],
+        ps["publishing_paths"] or [""],
+        ps["source_types"] or ["general"],
+    ]
+    combo_count=1
+    for values in dimensions:combo_count*=max(1,len(values))
+    total=combo_count*len(_PRESEARCH_TEMPLATES)
+    extra=(spec.get("query") or "").strip()
+    saturation=ps.get("saturation") or ""
+    contact_bits=[]
+    if ps.get("require_website"):contact_bits.append("official website")
+    if ps.get("require_public_email"):contact_bits.append("public professional email contact")
+    contact=" ".join(contact_bits)
+    routes=[];seen=set()
+    for combo in itertools.product(*dimensions):
+        country,genre,gender,position,language,activity,publishing,source=combo
+        activity_term=_PRESEARCH_ACTIVITY_TERMS.get(activity.lower(),activity)
+        source_term=_PRESEARCH_SOURCE_TERMS.get(source.lower(),source)
+        gender_term="" if gender=="any" else gender
+        vals={
+            "country":country,"genre":genre,"gender":gender_term,"position":position,
+            "language":language,"activity":activity_term,"publishing":publishing,"source":source_term,
+        }
+        for template in _PRESEARCH_TEMPLATES:
+            query=template.format(**vals)
+            tail=" ".join(x for x in [saturation,contact,extra] if x)
+            if tail:query+=" "+tail
+            query=re.sub(r"\s+"," ",query).strip()
+            key=query.lower()
+            if not query or key in seen:continue
+            seen.add(key)
+            routes.append({
+                "query":query,"country":country,"genre":genre,"gender":gender,
+                "position":position,"language":language,"activity":activity,
+                "publishing":publishing,"source_type":source,
+            })
+            if len(routes)>=max_routes:
+                return {"routes":routes,"total":total,"generated":len(routes),"capped":total>len(routes),"filters":ps}
+    return {"routes":routes,"total":total,"generated":len(routes),"capped":False,"filters":ps}
 
 
 # ---------------------------------------------------------------------------
