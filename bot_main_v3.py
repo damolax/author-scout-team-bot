@@ -63,6 +63,7 @@ SOURCE_INDEX_DEFAULT_COUNTRIES = [x.strip() for x in os.getenv(
 WEB_RESEARCH_JOB_CONCURRENCY = max(1, min(12, int(os.getenv("WEB_RESEARCH_JOB_CONCURRENCY", "4"))))
 WEB_RESEARCH_POLL_SECONDS = max(2, int(os.getenv("WEB_RESEARCH_POLL_SECONDS", "4")))
 WEB_MAX_RESEARCH_COUNT = max(1, min(100000, int(os.getenv("WEB_MAX_RESEARCH_COUNT", "50000"))))
+SEARCH_PLAN_MAX_ROUTES = max(1000, min(10000, int(os.getenv("SEARCH_PLAN_MAX_ROUTES", "5000"))))
 SCOUT_TARGET_PER_HOUR = max(30, min(600, int(os.getenv("SCOUT_TARGET_PER_HOUR", "300"))))
 SCOUT_MAX_MINUTES = max(1, min(10080, int(os.getenv("SCOUT_MAX_MINUTES", "10080"))))
 WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
