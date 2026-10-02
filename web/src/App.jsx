@@ -1387,6 +1387,8 @@ function AppCore() {
         token=sessionTokenFrom(current)
       }
       if (!token) throw new Error('Signed in, but no secure session token was returned. Please try again.')
+      setLoginStatus('Starting your Author Scout workspace…')
+      await waitForBackend()
       const d=await request('/api/v1/auth/neon-session','',{
         method:'POST',
         body:JSON.stringify({ session_token: token })
@@ -1428,20 +1430,24 @@ function AppCore() {
   const startManagedGoogle = useCallback(async () => {
     setChecking(true)
     setLoginError('')
-    setLoginStatus('Starting secure Google sign-in…')
+    setLoginStatus('Opening Google…')
     try {
-      // Keep the user on Vercel while Render wakes, then use the backend OAuth callback.
-      await waitForBackend()
+      // Clear only the old Author Scout app session. Better Auth will establish the new Google identity.
       localStorage.removeItem('authorScoutSession')
       setKeyValue('')
-      setLoginStatus('Opening Google…')
-      window.location.assign(API_BASE + '/auth/google/start')
+      const result=await authClient.signIn.social({
+        provider:'google',
+        callbackURL:window.location.origin
+      })
+      if (result?.error) throw new Error(result.error.message || 'Google sign-in failed')
+      // Most social sign-ins redirect. If a session is returned directly, exchange it now.
+      if (sessionTokenFrom(result)) await exchangeManagedAuth(result)
     } catch(e) {
-      setLoginError(e?.message || 'Google sign-in could not start. Please try again.')
+      setLoginError(e?.message || 'Google sign-in failed.')
       setLoginStatus('')
       setChecking(false)
     }
-  }, [])
+  }, [exchangeManagedAuth])
 
   const startForgotPassword = useCallback(async (emailValue) => {
     const email=String(emailValue || '').trim().toLowerCase()
