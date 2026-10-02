@@ -1354,17 +1354,25 @@ function AppCore() {
   const [loginStatus, setLoginStatus] = useState('')
   const [tab, setTab] = useState('dashboard')
 
-  const verify = useCallback(async (key) => {
-    setChecking(true); setLoginError('')
+  const verify = useCallback(async (rawKey) => {
+    const key=String(rawKey || '').replace(/\s+/g,'').trim()
+    if (!key) {
+      setLoginError('Paste a valid Author Scout access key.')
+      return
+    }
+    setChecking(true); setLoginError(''); setLoginStatus('Opening your workspace…')
     try {
       const s = await request('/api/v1/session', key)
       localStorage.setItem('authorScoutSession', key)
       setKeyValue(key)
-      setChecking(false)
       setSession(s)
+      setLoginStatus('')
     } catch(e) {
       localStorage.removeItem('authorScoutSession')
-      setKeyValue(''); setSession(null); setLoginError(e.message)
+      setKeyValue('')
+      setSession(null)
+      setLoginError(e?.message || 'That access key could not be verified.')
+      setLoginStatus('')
     } finally { setChecking(false) }
   }, [])
   const exchangeManagedAuth = useCallback(async (authResult = null) => {
@@ -1420,21 +1428,20 @@ function AppCore() {
   const startManagedGoogle = useCallback(async () => {
     setChecking(true)
     setLoginError('')
-    setLoginStatus('Opening Google…')
+    setLoginStatus('Starting secure Google sign-in…')
     try {
-      const result=await authClient.signIn.social({
-        provider:'google',
-        callbackURL:window.location.origin
-      })
-      if (result?.error) throw new Error(result.error.message || 'Google sign-in failed')
-      // Most social sign-ins redirect. If Neon returns a session directly, handle it too.
-      if (sessionTokenFrom(result)) await exchangeManagedAuth(result)
+      // Keep the user on Vercel while Render wakes, then use the backend OAuth callback.
+      await waitForBackend()
+      localStorage.removeItem('authorScoutSession')
+      setKeyValue('')
+      setLoginStatus('Opening Google…')
+      window.location.assign(API_BASE + '/auth/google/start')
     } catch(e) {
-      setLoginError(e?.message || 'Google sign-in failed.')
+      setLoginError(e?.message || 'Google sign-in could not start. Please try again.')
       setLoginStatus('')
       setChecking(false)
     }
-  }, [exchangeManagedAuth])
+  }, [])
 
   const startForgotPassword = useCallback(async (emailValue) => {
     const email=String(emailValue || '').trim().toLowerCase()
@@ -1462,32 +1469,44 @@ function AppCore() {
   useEffect(() => {
     let cancelled=false
     const boot=async () => {
-      const params = new URLSearchParams(window.location.search)
-      const incoming = params.get('session')
-      const authError = params.get('auth_error')
+      const params=new URLSearchParams(window.location.search)
+      const incoming=params.get('session')
+      const authError=params.get('auth_error')
+
+      // Backend Google login returns a fresh signed Author Scout session.
       if (incoming) {
-        localStorage.setItem('authorScoutSession', incoming)
-        setKeyValue(incoming)
-        window.history.replaceState({}, document.title, window.location.pathname)
+        window.history.replaceState({},document.title,window.location.pathname)
         await verify(incoming)
         return
       }
       if (authError) {
-        setLoginError('Sign-in was cancelled or could not be completed.')
-        window.history.replaceState({}, document.title, window.location.pathname)
+        localStorage.removeItem('authorScoutSession')
+        setKeyValue('')
+        setLoginError('Google sign-in was cancelled or could not be completed.')
+        window.history.replaceState({},document.title,window.location.pathname)
         return
       }
-      if (keyValue && !session) {
-        await verify(keyValue)
-        return
-      }
-      // Handles return from managed Google Auth, or an existing Neon Auth browser session.
+
+      // Email/password login may leave a valid managed Neon Auth session.
+      // Prefer that fresh identity before any stale Author Scout local session.
       try {
         const current=await authClient.getSession()
         if (!cancelled && !current?.error && sessionTokenFrom(current)) {
-          await exchangeManagedAuth(current)
+          try {
+            await exchangeManagedAuth(current)
+            return
+          } catch {
+            // Continue to stored Author Scout session if managed exchange fails.
+          }
         }
       } catch {}
+
+      const stored=localStorage.getItem('authorScoutSession') || ''
+      if (!cancelled && stored) {
+        await verify(stored)
+      } else if (!cancelled) {
+        setChecking(false)
+      }
     }
     boot()
     return () => { cancelled=true }
