@@ -1744,20 +1744,28 @@ def _issue_web_session(account: dict) -> str:
 
 async def handle_web_google_callback(code: str, state: str, error: str=""):
     if error:
-        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?auth_error="+urlencode({"e":error})[2:])
-    p=legacy.serializer.loads(state,max_age=900)
-    if p.get("mode")!="web_login":
-        raise legacy.HTTPException(status_code=400,detail="Invalid login state")
-    async with legacy.httpx.AsyncClient(timeout=30) as c:
-        tr=await c.post(legacy.GOOGLE_TOKEN,data={
-            "client_id":legacy.GOOGLE_CLIENT_ID,"client_secret":legacy.GOOGLE_CLIENT_SECRET,
-            "code":code,"grant_type":"authorization_code","redirect_uri":legacy.GOOGLE_REDIRECT_URI})
-        tr.raise_for_status(); td=tr.json()
-        pr=await c.get(legacy.GOOGLE_USERINFO,headers={"Authorization":f"Bearer {td['access_token']}"})
-        pr.raise_for_status(); profile=pr.json()
-    account=await asyncio.to_thread(_get_or_create_web_account,profile)
-    token=_issue_web_session(account)
-    return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?session="+urlencode({"s":token})[2:])
+        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?auth_error=google_cancelled")
+    try:
+        p=legacy.serializer.loads(state,max_age=900)
+        if p.get("mode")!="web_login":
+            raise ValueError("invalid login state")
+        async with legacy.httpx.AsyncClient(timeout=30) as c:
+            tr=await c.post(legacy.GOOGLE_TOKEN,data={
+                "client_id":legacy.GOOGLE_CLIENT_ID,"client_secret":legacy.GOOGLE_CLIENT_SECRET,
+                "code":code,"grant_type":"authorization_code","redirect_uri":legacy.GOOGLE_REDIRECT_URI})
+            tr.raise_for_status(); td=tr.json()
+            access_token=td.get("access_token") or ""
+            if not access_token:
+                raise RuntimeError("Google returned no access token")
+            pr=await c.get(legacy.GOOGLE_USERINFO,headers={"Authorization":f"Bearer {access_token}"})
+            pr.raise_for_status(); profile=pr.json()
+        account=await asyncio.to_thread(_get_or_create_web_account,profile)
+        token=_issue_web_session(account)
+        print(f"WEB_GOOGLE_LOGIN success=True account={account['id']} email={account['email']}")
+        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL.rstrip("/")+"?session="+token)
+    except Exception as e:
+        print(f"WEB_GOOGLE_LOGIN success=False error={type(e).__name__}: {e}")
+        return legacy.RedirectResponse(AUTHOR_SCOUT_WEB_URL+"?auth_error=google_failed")
 
 
 def _neon_auth_session(session_token: str) -> dict | None:
@@ -3343,11 +3351,13 @@ async def enhanced_handle(update: dict):
                 if not tm:
                     return await legacy.send(chat,"Join or create a team first.")
                 token=legacy.serializer.dumps({"scope":"web","team_id":int(tm["id"]),"uid":int(uid)})
+                direct_url=AUTHOR_SCOUT_WEB_URL.rstrip("/")+"?session="+token
                 return await legacy.send(chat,
-                    "<b>🔐 Author Scout Web Access Key</b>\n\n"
-                    "Paste this key into the web dashboard login screen. It is signed to your team and expires automatically.\n\n"
+                    "<b>🔐 Author Scout Web Access</b>\n\n"
+                    "Use the button below for one-tap sign in, or paste the key manually on the login screen.\n\n"
                     f"<code>{legacy.esc(token)}</code>\n\n"
-                    "Keep it private. Use /webkey again anytime to generate another valid signed key.")
+                    "This signed access is private to your current workspace and expires automatically.",
+                    {"inline_keyboard":[[{"text":"🌐 Open Author Scout","url":direct_url}]]})
             if cmd == "/indexstatus":
                 return await show_index_status(chat)
             if cmd == "/scoutstatus":
