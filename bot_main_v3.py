@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import io
 import itertools
 import json
@@ -646,19 +647,30 @@ def _normalize_presearch(spec: dict) -> dict:
 
 def _build_presearch_plan(spec: dict, max_routes: int=SEARCH_PLAN_MAX_ROUTES) -> dict:
     ps=_normalize_presearch(spec)
+    rotation_seed=str(spec.get("rotation_seed") or "").strip()
+
+    def rotate(values, label):
+        items=list(values or [])
+        if not rotation_seed or len(items)<2:
+            return items
+        digest=hashlib.sha256(f"{rotation_seed}:{label}".encode("utf-8")).hexdigest()
+        shift=int(digest[:8],16)%len(items)
+        return items[shift:]+items[:shift]
+
     dimensions=[
-        ps["countries"] or [""],
-        ps["genres"] or [""],
-        ps["genders"] or ["any"],
-        ps["positions"] or [""],
-        ps["languages"] or [""],
-        ps["activity_signals"] or [""],
-        ps["publishing_paths"] or [""],
-        ps["source_types"] or ["general"],
+        rotate(ps["countries"] or [""],"countries"),
+        rotate(ps["genres"] or [""],"genres"),
+        rotate(ps["genders"] or ["any"],"genders"),
+        rotate(ps["positions"] or [""],"positions"),
+        rotate(ps["languages"] or [""],"languages"),
+        rotate(ps["activity_signals"] or [""],"activity"),
+        rotate(ps["publishing_paths"] or [""],"publishing"),
+        rotate(ps["source_types"] or ["general"],"sources"),
     ]
+    templates=rotate(_PRESEARCH_TEMPLATES,"templates")
     combo_count=1
     for values in dimensions:combo_count*=max(1,len(values))
-    total=combo_count*len(_PRESEARCH_TEMPLATES)
+    total=combo_count*len(templates)
     extra=(spec.get("query") or "").strip()
     saturation=ps.get("saturation") or ""
     contact_bits=[]
@@ -675,7 +687,7 @@ def _build_presearch_plan(spec: dict, max_routes: int=SEARCH_PLAN_MAX_ROUTES) ->
             "country":country,"genre":genre,"gender":gender_term,"position":position,
             "language":language,"activity":activity_term,"publishing":publishing,"source":source_term,
         }
-        for template in _PRESEARCH_TEMPLATES:
+        for template in templates:
             query=template.format(**vals)
             tail=" ".join(x for x in [saturation,contact,extra] if x)
             if tail:query+=" "+tail
@@ -2258,6 +2270,8 @@ async def web_create_job(request: legacy.Request):
     spec["presearch"]=presearch
     normalized_presearch=_normalize_presearch(spec)
     spec["presearch"]=normalized_presearch
+    spec["rotation_seed"]=str(body.get("rotation_seed") or "").strip()[:200]
+    spec["preset_id"]=str(body.get("preset_id") or "").strip()[:100]
     plan=_build_presearch_plan(spec)
     spec["search_plan_total"]=int(plan["total"])
     spec["search_plan_generated"]=int(plan["generated"])
@@ -2308,7 +2322,8 @@ async def web_create_job(request: legacy.Request):
     return {"ok":True,"job_id":jid,"status":"queued","requested_count":requested,
             "duration_minutes":duration,"target_per_hour":target_rate,
             "search_plan_total":plan["total"],"search_plan_generated":plan["generated"],
-            "search_plan_capped":plan["capped"],"search_plan_samples":[r["query"] for r in plan["routes"][:5]]}
+            "search_plan_capped":plan["capped"],"search_plan_samples":[r["query"] for r in plan["routes"][:5]],
+            "rotation_seed":spec.get("rotation_seed") or "","preset_id":spec.get("preset_id") or ""}
 
 @app.get("/api/v1/research/jobs")
 async def web_jobs(request: legacy.Request, limit: int=30):
