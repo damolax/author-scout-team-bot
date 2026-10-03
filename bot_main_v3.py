@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import io
 import itertools
 import json
 import os
 import re
+import secrets
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -68,6 +70,7 @@ SCOUT_TARGET_PER_HOUR = max(30, min(600, int(os.getenv("SCOUT_TARGET_PER_HOUR", 
 SCOUT_MAX_MINUTES = max(1, min(10080, int(os.getenv("SCOUT_MAX_MINUTES", "10080"))))
 WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
 AUTHOR_SCOUT_WEB_URL = os.getenv("AUTHOR_SCOUT_WEB_URL", "https://author-scout-team-bot.vercel.app").strip()
+SCOUT_PLATFORM_SHARED_SECRET = os.getenv("SCOUT_PLATFORM_SHARED_SECRET", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_RESEARCH_MODEL = os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-terra").strip() or "gpt-5.6-terra"
 AI_RESEARCH_CONCURRENCY = max(1, min(4, int(os.getenv("AI_RESEARCH_CONCURRENCY", "2"))))
@@ -644,19 +647,30 @@ def _normalize_presearch(spec: dict) -> dict:
 
 def _build_presearch_plan(spec: dict, max_routes: int=SEARCH_PLAN_MAX_ROUTES) -> dict:
     ps=_normalize_presearch(spec)
+    rotation_seed=str(spec.get("rotation_seed") or "").strip()
+
+    def rotate(values, label):
+        items=list(values or [])
+        if not rotation_seed or len(items)<2:
+            return items
+        digest=hashlib.sha256(f"{rotation_seed}:{label}".encode("utf-8")).hexdigest()
+        shift=int(digest[:8],16)%len(items)
+        return items[shift:]+items[:shift]
+
     dimensions=[
-        ps["countries"] or [""],
-        ps["genres"] or [""],
-        ps["genders"] or ["any"],
-        ps["positions"] or [""],
-        ps["languages"] or [""],
-        ps["activity_signals"] or [""],
-        ps["publishing_paths"] or [""],
-        ps["source_types"] or ["general"],
+        rotate(ps["countries"] or [""],"countries"),
+        rotate(ps["genres"] or [""],"genres"),
+        rotate(ps["genders"] or ["any"],"genders"),
+        rotate(ps["positions"] or [""],"positions"),
+        rotate(ps["languages"] or [""],"languages"),
+        rotate(ps["activity_signals"] or [""],"activity"),
+        rotate(ps["publishing_paths"] or [""],"publishing"),
+        rotate(ps["source_types"] or ["general"],"sources"),
     ]
+    templates=rotate(_PRESEARCH_TEMPLATES,"templates")
     combo_count=1
     for values in dimensions:combo_count*=max(1,len(values))
-    total=combo_count*len(_PRESEARCH_TEMPLATES)
+    total=combo_count*len(templates)
     extra=(spec.get("query") or "").strip()
     saturation=ps.get("saturation") or ""
     contact_bits=[]
@@ -673,7 +687,7 @@ def _build_presearch_plan(spec: dict, max_routes: int=SEARCH_PLAN_MAX_ROUTES) ->
             "country":country,"genre":genre,"gender":gender_term,"position":position,
             "language":language,"activity":activity_term,"publishing":publishing,"source":source_term,
         }
-        for template in _PRESEARCH_TEMPLATES:
+        for template in templates:
             query=template.format(**vals)
             tail=" ".join(x for x in [saturation,contact,extra] if x)
             if tail:query+=" "+tail
@@ -2178,6 +2192,37 @@ async def web_telegram_link_code(request: legacy.Request):
             "command":f"/linkweb {code}","bot":"@Authorscoutbot"}
 
 
+@app.post("/api/v1/platform/session")
+async def web_platform_session(request: legacy.Request):
+    """Exchange a trusted Scout workspace identity for an Author Scout service session.
+
+    This endpoint is server-to-server only. It intentionally creates one Author Scout
+    identity per Scout workspace so author duplicate protection and the warm candidate
+    reservoir remain shared by the team.
+    """
+    supplied=(request.headers.get("x-scout-platform-secret") or "").strip()
+    if not SCOUT_PLATFORM_SHARED_SECRET or not supplied or not secrets.compare_digest(supplied,SCOUT_PLATFORM_SHARED_SECRET):
+        raise legacy.HTTPException(status_code=401,detail="Invalid Scout platform credentials")
+    body=await request.json()
+    workspace_id=str(body.get("workspace_id") or "").strip()
+    workspace_name=str(body.get("workspace_name") or "Scout Workspace").strip()[:120]
+    if not workspace_id:
+        raise legacy.HTTPException(status_code=400,detail="workspace_id is required")
+    stable=re.sub(r"[^a-zA-Z0-9]","",workspace_id)[:48] or "workspace"
+    profile={
+        "sub":"scout-platform-workspace:"+workspace_id,
+        "email":f"scout+{stable.lower()}@platform.local",
+        "name":workspace_name or "Scout Workspace",
+    }
+    account=await asyncio.to_thread(_get_or_create_web_account,profile)
+    return {
+        "ok":True,
+        "session":_issue_web_session(account),
+        "team_id":int(account["team_id"]),
+        "workspace_id":workspace_id,
+    }
+
+
 @app.get("/api/v1/session")
 async def web_session(request: legacy.Request):
     ctx=_web_auth(request)
@@ -2225,6 +2270,8 @@ async def web_create_job(request: legacy.Request):
     spec["presearch"]=presearch
     normalized_presearch=_normalize_presearch(spec)
     spec["presearch"]=normalized_presearch
+    spec["rotation_seed"]=str(body.get("rotation_seed") or "").strip()[:200]
+    spec["preset_id"]=str(body.get("preset_id") or "").strip()[:100]
     plan=_build_presearch_plan(spec)
     spec["search_plan_total"]=int(plan["total"])
     spec["search_plan_generated"]=int(plan["generated"])
@@ -2275,7 +2322,8 @@ async def web_create_job(request: legacy.Request):
     return {"ok":True,"job_id":jid,"status":"queued","requested_count":requested,
             "duration_minutes":duration,"target_per_hour":target_rate,
             "search_plan_total":plan["total"],"search_plan_generated":plan["generated"],
-            "search_plan_capped":plan["capped"],"search_plan_samples":[r["query"] for r in plan["routes"][:5]]}
+            "search_plan_capped":plan["capped"],"search_plan_samples":[r["query"] for r in plan["routes"][:5]],
+            "rotation_seed":spec.get("rotation_seed") or "","preset_id":spec.get("preset_id") or ""}
 
 @app.get("/api/v1/research/jobs")
 async def web_jobs(request: legacy.Request, limit: int=30):
