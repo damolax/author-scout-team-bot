@@ -67,7 +67,7 @@ SEARCH_PLAN_MAX_ROUTES = max(1000, min(10000, int(os.getenv("SEARCH_PLAN_MAX_ROU
 SCOUT_TARGET_PER_HOUR = max(30, min(600, int(os.getenv("SCOUT_TARGET_PER_HOUR", "300"))))
 SCOUT_MAX_MINUTES = max(1, min(10080, int(os.getenv("SCOUT_MAX_MINUTES", "10080"))))
 WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
-AUTHOR_SCOUT_WEB_URL = os.getenv("AUTHOR_SCOUT_WEB_URL", "https://author-scout-team-bot.vercel.app").strip()
+AUTHOR_SCOUT_WEB_URL = os.getenv("AUTHOR_SCOUT_WEB_URL", "https://author-scout-team-bot.vercel.app").strip()\nSCOUT_PLATFORM_SHARED_SECRET = os.getenv("SCOUT_PLATFORM_SHARED_SECRET", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_RESEARCH_MODEL = os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-terra").strip() or "gpt-5.6-terra"
 AI_RESEARCH_CONCURRENCY = max(1, min(4, int(os.getenv("AI_RESEARCH_CONCURRENCY", "2"))))
@@ -2176,6 +2176,37 @@ async def web_telegram_link_code(request: legacy.Request):
         c=code,a=ctx["account_id"],u=ctx["uid"],t=ctx["team_id"],e=exp,d=now)
     return {"ok":True,"linked":False,"code":code,"expires_at":exp,
             "command":f"/linkweb {code}","bot":"@Authorscoutbot"}
+
+
+@app.post("/api/v1/platform/session")
+async def web_platform_session(request: legacy.Request):
+    """Exchange a trusted Scout workspace identity for an Author Scout service session.
+
+    This endpoint is server-to-server only. It intentionally creates one Author Scout
+    identity per Scout workspace so author duplicate protection and the warm candidate
+    reservoir remain shared by the team.
+    """
+    supplied=(request.headers.get("x-scout-platform-secret") or "").strip()
+    if not SCOUT_PLATFORM_SHARED_SECRET or not supplied or not legacy.secrets.compare_digest(supplied,SCOUT_PLATFORM_SHARED_SECRET):
+        raise legacy.HTTPException(status_code=401,detail="Invalid Scout platform credentials")
+    body=await request.json()
+    workspace_id=str(body.get("workspace_id") or "").strip()
+    workspace_name=str(body.get("workspace_name") or "Scout Workspace").strip()[:120]
+    if not workspace_id:
+        raise legacy.HTTPException(status_code=400,detail="workspace_id is required")
+    stable=re.sub(r"[^a-zA-Z0-9]","",workspace_id)[:48] or legacy.hashlib.sha256(workspace_id.encode()).hexdigest()[:32]
+    profile={
+        "sub":"scout-platform-workspace:"+workspace_id,
+        "email":f"scout+{stable.lower()}@platform.local",
+        "name":workspace_name or "Scout Workspace",
+    }
+    account=await asyncio.to_thread(_get_or_create_web_account,profile)
+    return {
+        "ok":True,
+        "session":_issue_web_session(account),
+        "team_id":int(account["team_id"]),
+        "workspace_id":workspace_id,
+    }
 
 
 @app.get("/api/v1/session")
