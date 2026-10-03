@@ -67,7 +67,8 @@ SEARCH_PLAN_MAX_ROUTES = max(1000, min(10000, int(os.getenv("SEARCH_PLAN_MAX_ROU
 SCOUT_TARGET_PER_HOUR = max(30, min(600, int(os.getenv("SCOUT_TARGET_PER_HOUR", "300"))))
 SCOUT_MAX_MINUTES = max(1, min(10080, int(os.getenv("SCOUT_MAX_MINUTES", "10080"))))
 WEB_KEY_MAX_AGE_SECONDS = max(3600, int(os.getenv("WEB_KEY_MAX_AGE_SECONDS", str(30*24*3600))))
-AUTHOR_SCOUT_WEB_URL = os.getenv("AUTHOR_SCOUT_WEB_URL", "https://author-scout-team-bot.vercel.app").strip()\nSCOUT_PLATFORM_SHARED_SECRET = os.getenv("SCOUT_PLATFORM_SHARED_SECRET", "").strip()
+AUTHOR_SCOUT_WEB_URL = os.getenv("AUTHOR_SCOUT_WEB_URL", "https://author-scout-team-bot.vercel.app").strip()
+SCOUT_PLATFORM_SHARED_SECRET = os.getenv("SCOUT_PLATFORM_SHARED_SECRET", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_RESEARCH_MODEL = os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-terra").strip() or "gpt-5.6-terra"
 AI_RESEARCH_CONCURRENCY = max(1, min(4, int(os.getenv("AI_RESEARCH_CONCURRENCY", "2"))))
