@@ -7,6 +7,7 @@ import itertools
 import json
 import os
 import re
+import secrets
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -2188,7 +2189,7 @@ async def web_platform_session(request: legacy.Request):
     reservoir remain shared by the team.
     """
     supplied=(request.headers.get("x-scout-platform-secret") or "").strip()
-    if not SCOUT_PLATFORM_SHARED_SECRET or not supplied or not legacy.secrets.compare_digest(supplied,SCOUT_PLATFORM_SHARED_SECRET):
+    if not SCOUT_PLATFORM_SHARED_SECRET or not supplied or not secrets.compare_digest(supplied,SCOUT_PLATFORM_SHARED_SECRET):
         raise legacy.HTTPException(status_code=401,detail="Invalid Scout platform credentials")
     body=await request.json()
     workspace_id=str(body.get("workspace_id") or "").strip()
