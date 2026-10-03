@@ -2194,7 +2194,7 @@ async def web_platform_session(request: legacy.Request):
     workspace_name=str(body.get("workspace_name") or "Scout Workspace").strip()[:120]
     if not workspace_id:
         raise legacy.HTTPException(status_code=400,detail="workspace_id is required")
-    stable=re.sub(r"[^a-zA-Z0-9]","",workspace_id)[:48] or legacy.hashlib.sha256(workspace_id.encode()).hexdigest()[:32]
+    stable=re.sub(r"[^a-zA-Z0-9]","",workspace_id)[:48] or "workspace"
     profile={
         "sub":"scout-platform-workspace:"+workspace_id,
         "email":f"scout+{stable.lower()}@platform.local",
