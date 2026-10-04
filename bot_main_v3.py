@@ -3445,27 +3445,19 @@ async def connection_shutdown():
 
 # Temporary protected bridge used only to bootstrap ScopeFlow's isolated Neon role.
 # It never returns Author Scout's database password or full DATABASE_URL.
-@app.post("/internal/scopeflow-bootstrap")
-async def scopeflow_bootstrap(
-    request: legacy.Request,
-    x_scopeflow_bootstrap_token: str | None = legacy.Header(default=None),
-):
+@app.get("/internal/scopeflow-bootstrap")
+async def scopeflow_bootstrap(token: str = ""):
     expected = "97c0888f688bc3d50021f182de44003ed2e4b1cc8d02abc8bf5fb23b351d18f3"
-    supplied = x_scopeflow_bootstrap_token or ""
-    actual = hashlib.sha256(supplied.encode()).hexdigest()
+    actual = hashlib.sha256(token.encode()).hexdigest()
     if not legacy.secrets.compare_digest(actual, expected):
         raise legacy.HTTPException(404, "Not found")
-
-    body = await request.json()
-    password = str(body.get("password") or "")
-    if len(password) < 32:
-        raise legacy.HTTPException(400, "Invalid password")
 
     raw_url = os.getenv("DATABASE_URL", "")
     parsed = urlparse(raw_url)
     if not parsed.hostname:
         raise legacy.HTTPException(503, "Database host unavailable")
 
+    password = legacy.secrets.token_urlsafe(36)
     conn = legacy.engine.raw_connection()
     try:
         from psycopg import sql as psql
@@ -3503,6 +3495,7 @@ async def scopeflow_bootstrap(
         "ok": True,
         "host": parsed.hostname,
         "port": parsed.port or 5432,
+        "password": password,
         "current_user": str(current_user),
         "current_database": str(current_database),
     }
