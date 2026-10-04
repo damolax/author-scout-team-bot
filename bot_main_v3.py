@@ -3467,6 +3467,9 @@ async def scopeflow_bootstrap(token: str = ""):
     admin = psycopg.connect(raw_url, autocommit=True)
     try:
         with admin.cursor() as cur:
+            cur.execute("SELECT current_user")
+            current_user = str(cur.fetchone()[0])
+
             cur.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role_name,))
             if cur.fetchone():
                 cur.execute(
@@ -3485,21 +3488,84 @@ async def scopeflow_bootstrap(token: str = ""):
 
             cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (database_name,))
             if not cur.fetchone():
-                cur.execute(
-                    psql.SQL("CREATE DATABASE {} OWNER {}").format(
-                        psql.Identifier(database_name),
-                        psql.Identifier(role_name),
-                    )
+                cur.execute(psql.SQL("CREATE DATABASE {}").format(psql.Identifier(database_name)))
+
+            cur.execute(
+                psql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                    psql.Identifier(database_name),
+                    psql.Identifier(role_name),
                 )
-            else:
-                cur.execute(
-                    psql.SQL("ALTER DATABASE {} OWNER TO {}").format(
-                        psql.Identifier(database_name),
-                        psql.Identifier(role_name),
-                    )
-                )
+            )
     finally:
         admin.close()
+
+    admin_target_url = urlunparse(parsed._replace(path=f"/{database_name}"))
+    target_admin = psycopg.connect(admin_target_url)
+    try:
+        with target_admin.cursor() as cur:
+            schema_statements = [
+                "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+                """CREATE TABLE IF NOT EXISTS public.sf_accounts (
+                    id text primary key default gen_random_uuid()::text,
+                    auth_user_id text unique,
+                    name text not null,
+                    business_name text not null default '',
+                    email text unique not null,
+                    active boolean not null default true,
+                    is_admin boolean not null default false,
+                    last_sign_in_at timestamptz,
+                    created_at timestamptz not null default now(),
+                    updated_at timestamptz not null default now()
+                )""",
+                "CREATE UNIQUE INDEX IF NOT EXISTS sf_accounts_email_idx ON public.sf_accounts(lower(email))",
+                "CREATE UNIQUE INDEX IF NOT EXISTS sf_accounts_auth_user_idx ON public.sf_accounts(auth_user_id) WHERE auth_user_id IS NOT NULL",
+                """CREATE TABLE IF NOT EXISTS public.sf_workspaces (
+                    owner_id text primary key,
+                    data jsonb not null,
+                    updated_at timestamptz not null default now()
+                )""",
+                """CREATE TABLE IF NOT EXISTS public.sf_proposals (
+                    id text primary key,
+                    owner_id text not null,
+                    public_token text unique not null,
+                    invoice_tokens text[] not null default '{}'::text[],
+                    status text not null default 'draft',
+                    client_email text,
+                    updated_at timestamptz not null default now(),
+                    data jsonb not null
+                )""",
+                "CREATE INDEX IF NOT EXISTS sf_proposals_owner_idx ON public.sf_proposals(owner_id, updated_at desc)",
+                "CREATE INDEX IF NOT EXISTS sf_proposals_token_idx ON public.sf_proposals(public_token)",
+                "CREATE INDEX IF NOT EXISTS sf_proposals_invoice_tokens_idx ON public.sf_proposals USING gin(invoice_tokens)",
+                "CREATE INDEX IF NOT EXISTS sf_proposals_status_idx ON public.sf_proposals(owner_id, status)",
+                """CREATE TABLE IF NOT EXISTS public.sf_migration_meta (
+                    key text primary key,
+                    value jsonb not null,
+                    updated_at timestamptz not null default now()
+                )""",
+                """INSERT INTO public.sf_migration_meta(key,value)
+                   VALUES ('schema_version','{"source":"scopeflow","target":"neon","version":3,"auth":"neon","runtime":"render"}'::jsonb)
+                   ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=now()""",
+            ]
+            for statement in schema_statements:
+                cur.execute(statement)
+
+            cur.execute(
+                psql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(psql.Identifier(role_name))
+            )
+            cur.execute(
+                psql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {}").format(
+                    psql.Identifier(role_name)
+                )
+            )
+            cur.execute(
+                psql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {}").format(
+                    psql.Identifier(role_name)
+                )
+            )
+        target_admin.commit()
+    finally:
+        target_admin.close()
 
     from urllib.parse import quote
     host = parsed.hostname
@@ -3509,59 +3575,18 @@ async def scopeflow_bootstrap(token: str = ""):
         "?sslmode=require&channel_binding=require"
     )
 
-    schema_statements = [
-        "CREATE EXTENSION IF NOT EXISTS pgcrypto",
-        """CREATE TABLE IF NOT EXISTS public.sf_accounts (
-            id text primary key default gen_random_uuid()::text,
-            auth_user_id text unique,
-            name text not null,
-            business_name text not null default '',
-            email text unique not null,
-            active boolean not null default true,
-            is_admin boolean not null default false,
-            last_sign_in_at timestamptz,
-            created_at timestamptz not null default now(),
-            updated_at timestamptz not null default now()
-        )""",
-        "CREATE UNIQUE INDEX IF NOT EXISTS sf_accounts_email_idx ON public.sf_accounts(lower(email))",
-        "CREATE UNIQUE INDEX IF NOT EXISTS sf_accounts_auth_user_idx ON public.sf_accounts(auth_user_id) WHERE auth_user_id IS NOT NULL",
-        """CREATE TABLE IF NOT EXISTS public.sf_workspaces (
-            owner_id text primary key,
-            data jsonb not null,
-            updated_at timestamptz not null default now()
-        )""",
-        """CREATE TABLE IF NOT EXISTS public.sf_proposals (
-            id text primary key,
-            owner_id text not null,
-            public_token text unique not null,
-            invoice_tokens text[] not null default '{}'::text[],
-            status text not null default 'draft',
-            client_email text,
-            updated_at timestamptz not null default now(),
-            data jsonb not null
-        )""",
-        "CREATE INDEX IF NOT EXISTS sf_proposals_owner_idx ON public.sf_proposals(owner_id, updated_at desc)",
-        "CREATE INDEX IF NOT EXISTS sf_proposals_token_idx ON public.sf_proposals(public_token)",
-        "CREATE INDEX IF NOT EXISTS sf_proposals_invoice_tokens_idx ON public.sf_proposals USING gin(invoice_tokens)",
-        "CREATE INDEX IF NOT EXISTS sf_proposals_status_idx ON public.sf_proposals(owner_id, status)",
-        """CREATE TABLE IF NOT EXISTS public.sf_migration_meta (
-            key text primary key,
-            value jsonb not null,
-            updated_at timestamptz not null default now()
-        )""",
-        """INSERT INTO public.sf_migration_meta(key,value)
-           VALUES ('schema_version','{"source":"scopeflow","target":"neon","version":3,"auth":"neon","runtime":"render"}'::jsonb)
-           ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=now()""",
-    ]
-
-    target = psycopg.connect(db_url)
+    # Verify the restricted runtime role can use the ScopeFlow tables.
+    runtime = psycopg.connect(db_url)
     try:
-        with target.cursor() as cur:
-            for statement in schema_statements:
-                cur.execute(statement)
-        target.commit()
+        with runtime.cursor() as cur:
+            cur.execute("SELECT count(*) FROM public.sf_accounts")
+            cur.fetchone()
+            cur.execute("SELECT count(*) FROM public.sf_workspaces")
+            cur.fetchone()
+            cur.execute("SELECT count(*) FROM public.sf_proposals")
+            cur.fetchone()
     finally:
-        target.close()
+        runtime.close()
 
     return {
         "ok": True,
@@ -3570,4 +3595,5 @@ async def scopeflow_bootstrap(token: str = ""):
         "port": port,
         "database": database_name,
         "role": role_name,
+        "owner": current_user,
     }
