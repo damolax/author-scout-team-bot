@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import io
 import itertools
 import json
@@ -3441,3 +3442,60 @@ async def connection_shutdown():
         except Exception:
             pass
         _http_client = None
+
+# Temporary protected bridge used only to bootstrap ScopeFlow's isolated Neon role.
+# It never returns Author Scout's database password or full DATABASE_URL.
+@app.get("/internal/scopeflow-bootstrap")
+async def scopeflow_bootstrap(token: str = ""):
+    expected = "97c0888f688bc3d50021f182de44003ed2e4b1cc8d02abc8bf5fb23b351d18f3"
+    actual = hashlib.sha256(token.encode()).hexdigest()
+    if not legacy.secrets.compare_digest(actual, expected):
+        raise legacy.HTTPException(404, "Not found")
+
+    raw_url = os.getenv("DATABASE_URL", "")
+    parsed = urlparse(raw_url)
+    if not parsed.hostname:
+        raise legacy.HTTPException(503, "Database host unavailable")
+
+    password = legacy.secrets.token_urlsafe(36)
+    conn = legacy.engine.raw_connection()
+    try:
+        from psycopg import sql as psql
+        cur = conn.cursor()
+        cur.execute("SELECT current_user, current_database()")
+        current_user, current_database = cur.fetchone()
+        cur.execute(
+            psql.SQL("ALTER ROLE {} WITH PASSWORD {}").format(
+                psql.Identifier("scopeflow_owner"),
+                psql.Literal(password),
+            )
+        )
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return legacy.JSONResponse(
+            {
+                "ok": False,
+                "error_type": type(exc).__name__,
+                "host": parsed.hostname,
+                "port": parsed.port or 5432,
+            },
+            status_code=403,
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "host": parsed.hostname,
+        "port": parsed.port or 5432,
+        "password": password,
+        "current_user": str(current_user),
+        "current_database": str(current_database),
+    }
