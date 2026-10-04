@@ -3443,7 +3443,7 @@ async def connection_shutdown():
             pass
         _http_client = None
 
-# Temporary protected bridge used only to bootstrap ScopeFlow's Neon runtime.
+# Temporary protected bridge used only to bootstrap ScopeFlow's isolated Neon runtime.
 # Token-gated and removed immediately after bootstrap.
 @app.get("/internal/scopeflow-bootstrap")
 async def scopeflow_bootstrap(token: str = ""):
@@ -3457,33 +3457,117 @@ async def scopeflow_bootstrap(token: str = ""):
     if not parsed.hostname:
         raise legacy.HTTPException(503, "Database host unavailable")
 
+    role_name = "scopeflow_runtime"
+    database_name = "scopeflow_live"
+    password = legacy.secrets.token_urlsafe(36)
+
+    import psycopg
+    from psycopg import sql as psql
+
+    admin = psycopg.connect(raw_url, autocommit=True)
     try:
-        with legacy.engine.begin() as conn:
-            role = conn.execute(legacy.text(
-                "SELECT current_user, current_database(), r.rolcreatedb, r.rolcreaterole "
-                "FROM pg_roles r WHERE r.rolname=current_user"
-            )).first()
-            checks = conn.execute(legacy.text(
-                "SELECT "
-                "has_schema_privilege(current_user,'public','USAGE') AS schema_usage, "
-                "has_schema_privilege(current_user,'public','CREATE') AS schema_create"
-            )).first()
-        return {
-            "ok": True,
-            "database_url": raw_url,
-            "host": parsed.hostname,
-            "port": parsed.port or 5432,
-            "current_user": str(role[0]),
-            "current_database": str(role[1]),
-            "rolcreatedb": bool(role[2]),
-            "rolcreaterole": bool(role[3]),
-            "public_usage": bool(checks[0]),
-            "public_create": bool(checks[1]),
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "error_type": type(exc).__name__,
-            "host": parsed.hostname,
-            "port": parsed.port or 5432,
-        }
+        with admin.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (role_name,))
+            if cur.fetchone():
+                cur.execute(
+                    psql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                        psql.Identifier(role_name),
+                        psql.Literal(password),
+                    )
+                )
+            else:
+                cur.execute(
+                    psql.SQL("CREATE ROLE {} WITH LOGIN PASSWORD {}").format(
+                        psql.Identifier(role_name),
+                        psql.Literal(password),
+                    )
+                )
+
+            cur.execute("SELECT 1 FROM pg_database WHERE datname=%s", (database_name,))
+            if not cur.fetchone():
+                cur.execute(
+                    psql.SQL("CREATE DATABASE {} OWNER {}").format(
+                        psql.Identifier(database_name),
+                        psql.Identifier(role_name),
+                    )
+                )
+            else:
+                cur.execute(
+                    psql.SQL("ALTER DATABASE {} OWNER TO {}").format(
+                        psql.Identifier(database_name),
+                        psql.Identifier(role_name),
+                    )
+                )
+    finally:
+        admin.close()
+
+    from urllib.parse import quote
+    host = parsed.hostname
+    port = parsed.port or 5432
+    db_url = (
+        f"postgresql://{role_name}:{quote(password, safe='')}@{host}:{port}/{database_name}"
+        "?sslmode=require&channel_binding=require"
+    )
+
+    schema_statements = [
+        "CREATE EXTENSION IF NOT EXISTS pgcrypto",
+        """CREATE TABLE IF NOT EXISTS public.sf_accounts (
+            id text primary key default gen_random_uuid()::text,
+            auth_user_id text unique,
+            name text not null,
+            business_name text not null default '',
+            email text unique not null,
+            active boolean not null default true,
+            is_admin boolean not null default false,
+            last_sign_in_at timestamptz,
+            created_at timestamptz not null default now(),
+            updated_at timestamptz not null default now()
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS sf_accounts_email_idx ON public.sf_accounts(lower(email))",
+        "CREATE UNIQUE INDEX IF NOT EXISTS sf_accounts_auth_user_idx ON public.sf_accounts(auth_user_id) WHERE auth_user_id IS NOT NULL",
+        """CREATE TABLE IF NOT EXISTS public.sf_workspaces (
+            owner_id text primary key,
+            data jsonb not null,
+            updated_at timestamptz not null default now()
+        )""",
+        """CREATE TABLE IF NOT EXISTS public.sf_proposals (
+            id text primary key,
+            owner_id text not null,
+            public_token text unique not null,
+            invoice_tokens text[] not null default '{}'::text[],
+            status text not null default 'draft',
+            client_email text,
+            updated_at timestamptz not null default now(),
+            data jsonb not null
+        )""",
+        "CREATE INDEX IF NOT EXISTS sf_proposals_owner_idx ON public.sf_proposals(owner_id, updated_at desc)",
+        "CREATE INDEX IF NOT EXISTS sf_proposals_token_idx ON public.sf_proposals(public_token)",
+        "CREATE INDEX IF NOT EXISTS sf_proposals_invoice_tokens_idx ON public.sf_proposals USING gin(invoice_tokens)",
+        "CREATE INDEX IF NOT EXISTS sf_proposals_status_idx ON public.sf_proposals(owner_id, status)",
+        """CREATE TABLE IF NOT EXISTS public.sf_migration_meta (
+            key text primary key,
+            value jsonb not null,
+            updated_at timestamptz not null default now()
+        )""",
+        """INSERT INTO public.sf_migration_meta(key,value)
+           VALUES ('schema_version','{"source":"scopeflow","target":"neon","version":3,"auth":"neon","runtime":"render"}'::jsonb)
+           ON CONFLICT (key) DO UPDATE SET value=excluded.value, updated_at=now()""",
+    ]
+
+    target = psycopg.connect(db_url)
+    try:
+        with target.cursor() as cur:
+            for statement in schema_statements:
+                cur.execute(statement)
+        target.commit()
+    finally:
+        target.close()
+
+    return {
+        "ok": True,
+        "database_url": db_url,
+        "host": host,
+        "port": port,
+        "database": database_name,
+        "role": role_name,
+    }
