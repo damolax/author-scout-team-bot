@@ -3302,18 +3302,6 @@ async def enhanced_handle(update: dict):
                 if ok:
                     return await legacy.send(chat,"✅ <b>Telegram linked</b>\n\n"+legacy.esc(msg)+"\nYour web app and Telegram companion now use the same workspace.",enhanced_main_menu())
                 return await legacy.send(chat,"⚠️ "+legacy.esc(msg))
-            if cmd == "/webkey":
-                tm=legacy.team(uid)
-                if not tm:
-                    return await legacy.send(chat,"Join or create a team first.")
-                token=legacy.serializer.dumps({"scope":"web","team_id":int(tm["id"]),"uid":int(uid)})
-                direct_url=AUTHOR_SCOUT_WEB_URL.rstrip("/")+"?session="+token
-                return await legacy.send(chat,
-                    "<b>🔐 Author Scout Web Access</b>\n\n"
-                    "Use the button below for one-tap sign in, or paste the key manually on the login screen.\n\n"
-                    f"<code>{legacy.esc(token)}</code>\n\n"
-                    "This signed access is private to your current workspace and expires automatically.",
-                    {"inline_keyboard":[[{"text":"🌐 Open Author Scout","url":direct_url}]]})
             if cmd == "/indexstatus":
                 return await show_index_status(chat)
             if cmd == "/scoutstatus":
@@ -3350,7 +3338,6 @@ async def connection_startup():
                 {"command": "find", "description": "Scout authors using filters or natural language"},
                 {"command": "indexstatus", "description": "Show source index and author reservoir"},
                 {"command": "scoutstatus", "description": "Show your active Scout progress and time remaining"},
-                {"command": "webkey", "description": "Generate a signed key for the Author Scout web dashboard"},
                 {"command": "connections", "description": "Show qualified LinkedIn connections ready now"},
                 {"command": "connectsetup", "description": "Set your LinkedIn profile for background connection research"},
                 {"command": "connectionstatus", "description": "Show ready, connected and archived connection counts"},
