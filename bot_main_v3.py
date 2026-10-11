@@ -2444,6 +2444,8 @@ async def web_import_chatgpt_results(request: legacy.Request, file: UploadFile=F
         pid,is_new,existing=legacy.claim(uid,tid,{**item,"verification_status":"imported_unverified","discovery_source_type":"workbook_import"})
         if not pid or (existing and int(existing["claimed_by_user_id"])!=uid):
             issues.append({"row":item["row"],"name":item["name"],"reason":"Contact could not be added"});continue
+        if existing and existing['name'].strip().casefold()!=item['name'].strip().casefold():
+            issues.append({"row":item["row"],"name":item["name"],"reason":"Website or contact matches a different author; review identity"});continue
         ex=legacy.row("SELECT id,status,reply_status FROM messages WHERE prospect_id=:p ORDER BY id DESC LIMIT 1",p=pid)
         if ex and (ex['status'] in {'sent','sending','sending_web'} or ex.get('reply_status')=='replied'):
             issues.append({"row":item["row"],"name":item["name"],"reason":"Sent or active conversation preserved"});continue
@@ -2496,7 +2498,7 @@ async def web_messages(request: legacy.Request, status: str="ready", limit: int=
     elif status=="all":
         condition="1=1"
     else:
-        condition="m.status='ready'"
+        condition="m.status='ready' AND COALESCE(m.reply_status,'')<>'replied'"
         status="ready"
     params={"u":uid,"n":limit,"offset":max(0,offset)}
     search_sql=""
