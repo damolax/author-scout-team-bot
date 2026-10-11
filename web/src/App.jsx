@@ -1406,7 +1406,7 @@ function AppCore() {
             <Authors keyValue={keyValue} active={tab === 'authors'} />
           </div>
           <div className={tab === 'messages' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'messages'}>
-            <Letterdesk keyValue={keyValue} active={tab === 'messages'} request={request} apiBase={API_BASE} />
+            <Letterdesk keyValue={keyValue} active={tab === 'messages'} request={request} apiBase={API_BASE} displayName={session?.account?.display_name || ''} />
           </div>
           <div className={tab === 'connections' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'connections'}>
             <Connections keyValue={keyValue} active={tab === 'connections'} />
