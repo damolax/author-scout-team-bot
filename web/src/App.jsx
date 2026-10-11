@@ -309,6 +309,7 @@ function Dashboard({ keyValue, session, active }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [telegram, setTelegram] = useState(null)
+  const [telegramKey, setTelegramKey] = useState('')
   const [linking, setLinking] = useState(false)
   const [authMethods, setAuthMethods] = useState([])
   const [authMethodsError, setAuthMethodsError] = useState('')
@@ -352,11 +353,16 @@ function Dashboard({ keyValue, session, active }) {
     }
   }
 
-  const createTelegramLink = async () => {
+  const connectTelegramWithKey = async () => {
+    if (!telegramKey.trim()) return
     setLinking(true); setError('')
     try {
-      const d = await request('/api/v1/telegram/link-code', keyValue, { method:'POST', body:'{}' })
+      const d = await request('/api/v1/telegram/link-with-key', keyValue, {
+        method:'POST',
+        body:JSON.stringify({ key: telegramKey.trim() })
+      })
       setTelegram(d)
+      setTelegramKey('')
     } catch(e) { setError(e.message) }
     finally { setLinking(false) }
   }
@@ -406,22 +412,26 @@ function Dashboard({ keyValue, session, active }) {
       <div className="panel telegram-link-card">
         <div>
           <div className="eyebrow">Telegram companion</div>
-          <h2>{telegramLinked ? 'Telegram is connected' : 'Use Author Scout from Telegram too'}</h2>
+          <h2>{telegramLinked ? 'Telegram is connected' : 'Connect Telegram'}</h2>
           <p>{telegramLinked
-            ? 'Your web app and Telegram companion use the same workspace.'
-            : 'Telegram is optional. Link it once to receive Scout updates and use quick actions from @Authorscoutbot.'}</p>
+            ? 'Your web app and Telegram companion use the same Author Scout workspace.'
+            : 'In @Authorscoutbot, send /webkey. Copy the key it gives you, then paste it here. The key only connects Telegram and cannot be used to sign in.'}</p>
         </div>
         {telegramLinked
           ? <span className="status status-completed">Connected</span>
-          : telegram?.code
-            ? <div className="telegram-link-code">
-                <span>Send this to @Authorscoutbot</span>
-                <code>{telegram.command}</code>
-                <a className="button button-quiet" href="https://t.me/Authorscoutbot" target="_blank" rel="noreferrer">Open Telegram ↗</a>
-              </div>
-            : <button className="button button-quiet" onClick={createTelegramLink} disabled={linking}>
-                {linking ? 'Creating code…' : 'Connect Telegram'}
-              </button>}
+          : <div className="telegram-key-connect">
+              <a className="button button-quiet" href="https://t.me/Authorscoutbot" target="_blank" rel="noreferrer">Open Telegram ↗</a>
+              <textarea
+                rows="2"
+                value={telegramKey}
+                onChange={e => setTelegramKey(e.target.value)}
+                placeholder="Paste /webkey from Telegram"
+                aria-label="Telegram connection key"
+              />
+              <button className="button button-primary" onClick={connectTelegramWithKey} disabled={linking || !telegramKey.trim()}>
+                {linking ? 'Connecting…' : 'Connect Telegram'}
+              </button>
+            </div>}
       </div>
     </section>
   )
