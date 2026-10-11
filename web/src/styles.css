@@ -479,3 +479,11 @@ tbody tr:hover{background:#fff9d9}
   .filter-head{align-items:flex-start}
   .route-counter{text-align:left;min-width:0}
 }
+
+
+.telegram-key-connect{display:grid;grid-template-columns:auto minmax(240px,1fr) auto;gap:9px;align-items:center;min-width:min(640px,100%)}
+.telegram-key-connect textarea{min-height:44px;max-height:86px;resize:vertical;font-size:11px;line-height:1.35;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all}
+@media(max-width:860px){
+  .telegram-key-connect{grid-template-columns:1fr;min-width:100%}
+  .telegram-key-connect .button{width:100%}
+}
