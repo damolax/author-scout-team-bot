@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { authClient, sessionTokenFrom } from './auth.js'
+import Letterdesk from './Letterdesk.jsx'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://author-scout-team-bot.onrender.com').replace(/\/$/, '')
 
@@ -1061,195 +1062,6 @@ function Authors({ keyValue, active }) {
 }
 
 
-function Messages({ keyValue, active }) {
-  const [items, setItems] = useState([])
-  const [status, setStatus] = useState('ready')
-  const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState(null)
-  const [gmail, setGmail] = useState({ connected: false, accounts: [] })
-  const [busyId, setBusyId] = useState(null)
-  const [importing, setImporting] = useState(false)
-  const [notice, setNotice] = useState('')
-  const [error, setError] = useState('')
-
-  const load = useCallback(async () => {
-    try {
-      const q = search.trim() ? '&search=' + encodeURIComponent(search.trim()) : ''
-      const d = await request('/api/v1/messages?status=' + encodeURIComponent(status) + '&limit=150' + q, keyValue)
-      setItems(d.messages || [])
-      setGmail(d.gmail || { connected: false, accounts: [] })
-      setError('')
-      if (selected) {
-        const fresh = (d.messages || []).find(x => x.id === selected.id)
-        if (fresh) setSelected(fresh)
-      }
-    } catch (e) { setError(e.message) }
-  }, [keyValue, status, search, selected?.id])
-
-  useEffect(() => {
-    if (!active) return
-    const t = setTimeout(load, 250)
-    return () => clearTimeout(t)
-  }, [load, active])
-  usePolling(load, 9000, active)
-
-  const importResults = async (file) => {
-    if (!file) return
-    setImporting(true); setError(''); setNotice('')
-    try {
-      const form = new FormData()
-      form.append('file', file)
-      const res = await fetch(API_BASE + '/api/v1/messages/import', {
-        method: 'POST',
-        headers: { 'X-Author-Scout-Key': keyValue },
-        body: form
-      })
-      let d = {}
-      try { d = await res.json() } catch {}
-      if (!res.ok) throw new Error(d.detail || 'Could not import this file')
-      setStatus('ready')
-      setNotice('Imported ' + (d.ready || 0) + ' ready messages. ' + (d.unmatched || 0) + ' unmatched, ' + (d.skipped || 0) + ' skipped.')
-      await load()
-    } catch (e) { setError(e.message) }
-    finally { setImporting(false) }
-  }
-
-  const openGmail = async (id) => {
-    const popup = window.open('about:blank', '_blank')
-    if (popup) popup.opener = null
-    setBusyId(id); setError(''); setNotice('')
-    try {
-      const d = await request('/api/v1/messages/' + id + '/compose-link', keyValue)
-      if (!popup) throw new Error('Your browser blocked the Gmail tab. Allow pop-ups for Author Scout and try again.')
-      popup.location.replace(d.url)
-      setNotice('Gmail opened in a new tab. Author Scout will stay here.')
-    } catch (e) {
-      if (popup) popup.close()
-      setError(e.message)
-    } finally { setBusyId(null) }
-  }
-
-  const updateStatus = async (id, next) => {
-    setBusyId(id); setError(''); setNotice('')
-    try {
-      await request('/api/v1/messages/' + id + '/status', keyValue, {
-        method: 'POST',
-        body: JSON.stringify({ status: next })
-      })
-      setNotice(next === 'replied' ? 'Marked replied.' : next === 'sent' ? 'Marked sent.' : 'Moved to Ready.')
-      setSelected(null)
-      await load()
-    } catch (e) { setError(e.message) }
-    finally { setBusyId(null) }
-  }
-
-  const sendNow = async (id) => {
-    if (!window.confirm('Send this message now through your connected Gmail account?')) return
-    setBusyId(id); setError(''); setNotice('')
-    try {
-      const d = await request('/api/v1/messages/' + id + '/send', keyValue, {
-        method: 'POST',
-        body: JSON.stringify({})
-      })
-      setNotice('Sent through ' + (d.sender_email || 'Gmail') + '.')
-      setSelected(null)
-      await load()
-    } catch (e) { setError(e.message) }
-    finally { setBusyId(null) }
-  }
-
-  const copyText = async (m) => {
-    try {
-      await navigator.clipboard.writeText((m.subject ? 'Subject: ' + m.subject + '\n\n' : '') + (m.body || ''))
-      setNotice('Message copied.')
-    } catch { setError('Copy failed.') }
-  }
-
-  return (
-    <section>
-      <div className="page-head">
-        <div><div className="eyebrow">Outreach</div><h1>Messages</h1></div>
-        <div className="message-toolbar">
-          <label className={'button button-quiet file-button ' + (importing ? 'disabled' : '')}>
-            {importing ? 'Importing…' : 'Import ChatGPT Results'}
-            <input hidden disabled={importing} type="file" accept=".xlsx,.xlsm,.csv" onChange={e => {
-              const file = e.target.files?.[0]
-              e.target.value = ''
-              importResults(file)
-            }} />
-          </label>
-          <input className="search-box" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} />
-          <select className="select" value={status} onChange={e => { setStatus(e.target.value); setSelected(null) }}>
-            <option value="ready">Ready</option>
-            <option value="sent">Sent</option>
-            <option value="replied">Replied</option>
-            <option value="all">All</option>
-          </select>
-        </div>
-      </div>
-
-      <div className={'alert ' + (gmail.connected ? 'alert-success' : 'alert-error')}>
-        {gmail.connected
-          ? 'Gmail connected: ' + (gmail.accounts || []).map(a => a.email).join(', ')
-          : 'Connect Gmail with /gmail in Telegram to enable direct sending.'}
-      </div>
-      {notice && <div className="alert alert-success">{notice}</div>}
-      {error && <div className="alert alert-error">{error}</div>}
-
-      <div className="panel table-panel">
-        {!items.length ? <Empty title={'No ' + status + ' messages'} body={status === 'ready' ? 'Import the finished ChatGPT workbook to add messages.' : 'No messages in this view.'} /> :
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>Author</th><th>Recipient</th><th>Subject</th><th>Status</th><th>Sent</th><th>Actions</th></tr></thead>
-            <tbody>
-              {items.map(m => <tr key={m.id}>
-                <td><strong>{m.author_name}</strong><small>{[m.author_country, m.author_genre].filter(Boolean).join(' · ') || '#' + m.id}</small></td>
-                <td>{m.recipient || '—'}</td>
-                <td title={m.subject}>{short(m.subject, 72) || '—'}</td>
-                <td><Status value={m.reply_status === 'replied' ? 'replied' : m.status} /></td>
-                <td>{fmt(m.sent_at)}</td>
-                <td>
-                  <div className="inline-actions">
-                    <button className="button button-quiet" onClick={() => setSelected(m)}>Review</button>
-                    {m.status !== 'sent' && <button className="button button-primary" disabled={busyId === m.id} onClick={() => openGmail(m.id)}>Message ↗</button>}
-                    {m.status !== 'sent' && gmail.connected && <button className="button button-good" disabled={busyId === m.id} onClick={() => sendNow(m.id)}>Send now</button>}
-                    {m.status !== 'sent' && <button className="button button-quiet" disabled={busyId === m.id} onClick={() => updateStatus(m.id, 'sent')}>Mark Sent</button>}
-                    {m.status === 'sent' && m.reply_status !== 'replied' && <button className="button button-good" disabled={busyId === m.id} onClick={() => updateStatus(m.id, 'replied')}>Mark Replied</button>}
-                  </div>
-                </td>
-              </tr>)}
-            </tbody>
-          </table>
-        </div>}
-      </div>
-
-      {selected && <div className="panel message-review">
-        <div className="panel-head">
-          <div><span className="kicker">Message #{selected.id}</span><h2>{selected.author_name}</h2></div>
-          <button className="button button-quiet" onClick={() => setSelected(null)}>Close</button>
-        </div>
-        <div className="message-review-meta">
-          <div><span>To</span><strong>{selected.recipient || 'No recipient'}</strong></div>
-          <div><span>Subject</span><strong>{selected.subject || 'No subject'}</strong></div>
-        </div>
-        <div className="message-body">{selected.body || 'No message body.'}</div>
-        {selected.body_english && selected.body_english !== selected.body && <>
-          <span className="kicker message-english-kicker">English version</span>
-          <div className="message-body">{selected.body_english}</div>
-        </>}
-        <div className="connection-actions">
-          <button className="button button-quiet" onClick={() => copyText(selected)}>Copy</button>
-          {selected.status !== 'sent' && <button className="button button-primary" disabled={busyId === selected.id} onClick={() => openGmail(selected.id)}>Message ↗</button>}
-          {selected.status !== 'sent' && gmail.connected && <button className="button button-good" disabled={busyId === selected.id} onClick={() => sendNow(selected.id)}>Send now</button>}
-          {selected.status !== 'sent' && <button className="button button-quiet" disabled={busyId === selected.id} onClick={() => updateStatus(selected.id, 'sent')}>Mark Sent</button>}
-          {selected.status === 'sent' && selected.reply_status !== 'replied' && <button className="button button-good" disabled={busyId === selected.id} onClick={() => updateStatus(selected.id, 'replied')}>Mark Replied</button>}
-          {selected.status === 'sent' && <button className="button button-danger-quiet" disabled={busyId === selected.id} onClick={() => updateStatus(selected.id, 'ready')}>Move to Ready</button>}
-        </div>
-      </div>}
-    </section>
-  )
-}
-
 function Connections({ keyValue, active }) {
   const [items, setItems] = useState([])
   const [status, setStatus] = useState('ready')
@@ -1342,7 +1154,7 @@ const NAV = [
   ['dashboard','Overview','⌂'],
   ['research','Scout','⌕'],
   ['authors','Authors','A'],
-  ['messages','Messages','✉'],
+  ['messages','Letterdesk','✉'],
   ['connections','Connections','↗'],
 ]
 
@@ -1352,7 +1164,7 @@ function AppCore() {
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
   const [loginStatus, setLoginStatus] = useState('')
-  const [tab, setTab] = useState('dashboard')
+  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') === 'messages' ? 'messages' : 'dashboard')
 
   const verify = useCallback(async (rawKey) => {
     const key=String(rawKey || '').replace(/\s+/g,'').trim()
@@ -1592,7 +1404,7 @@ function AppCore() {
             <Authors keyValue={keyValue} active={tab === 'authors'} />
           </div>
           <div className={tab === 'messages' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'messages'}>
-            <Messages keyValue={keyValue} active={tab === 'messages'} />
+            <Letterdesk keyValue={keyValue} active={tab === 'messages'} request={request} apiBase={API_BASE} />
           </div>
           <div className={tab === 'connections' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'connections'}>
             <Connections keyValue={keyValue} active={tab === 'connections'} />
