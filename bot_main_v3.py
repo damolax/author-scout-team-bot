@@ -8,6 +8,8 @@ import itertools
 import json
 import os
 import re
+import smtplib
+import ssl
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -73,6 +75,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_RESEARCH_MODEL = os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-terra").strip() or "gpt-5.6-terra"
 AI_RESEARCH_CONCURRENCY = max(1, min(4, int(os.getenv("AI_RESEARCH_CONCURRENCY", "2"))))
 AI_RESEARCH_POLL_SECONDS = max(3, int(os.getenv("AI_RESEARCH_POLL_SECONDS", "5")))
+SMTP_QUEUE_POLL_SECONDS = max(2, int(os.getenv("SMTP_QUEUE_POLL_SECONDS", "5")))
+SMTP_MIN_COOLDOWN_SECONDS = max(30, int(os.getenv("SMTP_MIN_COOLDOWN_SECONDS", "60")))
+SMTP_MAX_DAILY_PER_SENDER = max(1, min(500, int(os.getenv("SMTP_MAX_DAILY_PER_SENDER", "200"))))
 
 
 # AUTHOR_SCOUT_WEB_CORS
@@ -428,6 +433,46 @@ def init_connection_db() -> None:
         )""",
         "CREATE INDEX IF NOT EXISTS idx_ai_research_user_status ON ai_research_jobs(user_id,status)",
         "CREATE INDEX IF NOT EXISTS idx_web_jobs_team_status ON web_research_jobs(team_id,status)",
+        f"""CREATE TABLE IF NOT EXISTS smtp_sender_accounts(
+            id {pk},
+            team_id INTEGER NOT NULL,
+            user_id BIGINT NOT NULL,
+            label TEXT DEFAULT '',
+            sender_name TEXT DEFAULT '',
+            email TEXT NOT NULL,
+            reply_to TEXT DEFAULT '',
+            smtp_host TEXT NOT NULL,
+            smtp_port INTEGER NOT NULL DEFAULT 587,
+            smtp_username TEXT NOT NULL,
+            smtp_password_enc TEXT NOT NULL,
+            security TEXT NOT NULL DEFAULT 'starttls',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+            daily_limit INTEGER NOT NULL DEFAULT 100,
+            sent_today INTEGER NOT NULL DEFAULT 0,
+            sent_day TEXT DEFAULT '',
+            last_sent_at TEXT DEFAULT '',
+            next_eligible_at TEXT DEFAULT '',
+            last_error TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(team_id,email)
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS smtp_send_queue(
+            id {pk},
+            team_id INTEGER NOT NULL,
+            user_id BIGINT NOT NULL,
+            message_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            sender_account_id INTEGER,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            error TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            sent_at TEXT DEFAULT ''
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_smtp_senders_team_enabled ON smtp_sender_accounts(team_id,enabled,next_eligible_at)",
+        "CREATE INDEX IF NOT EXISTS idx_smtp_queue_team_status ON smtp_send_queue(team_id,status,id)",
         "CREATE INDEX IF NOT EXISTS idx_web_job_results_job ON web_research_job_results(job_id,position)",
     ]
     with legacy.engine.begin() as c:
