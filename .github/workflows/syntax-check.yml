@@ -19,6 +19,21 @@ jobs:
         run: python -m py_compile bot_main.py bot_main_v3.py
       - name: Import v3 overlay
         run: python -c "import bot_main_v3; print('Author Scout', bot_main_v3.app.version)"
+      - name: Letterdesk import regression
+        run: |
+          python - <<'PY'
+          from letterdesk_import import parse_upload
+          csv_data = (
+              "Original Row,Author,Recorded Email,Readiness / Hold,Subject,Author-language Message,English Review,Primary Research Source\n"
+              "1,Author One,shared@example.com,READY,Subject One,Primary one,English one,https://example.com/a\n"
+              "2,Author Two,shared@example.com,READY,Subject Two,Primary two,English two,https://example.com/b\n"
+          ).encode("utf-8")
+          parsed = parse_upload(csv_data, "letterdesk-real-headers.csv")
+          assert len(parsed["rows"]) == 2, parsed
+          assert parsed["rows"][0]["email"] == "shared@example.com"
+          assert parsed["rows"][1]["email"] == "shared@example.com"
+          print("Letterdesk regression rows:", len(parsed["rows"]))
+          PY
 
   web:
     runs-on: ubuntu-latest
