@@ -142,10 +142,8 @@ function Empty({ title, body }) {
   )
 }
 
-function Login({ onLegacyLogin, onGoogle, onEmail, onForgot, busy, error, status }) {
+function Login({ onGoogle, onEmail, onForgot, busy, error, status }) {
   const [mode, setMode] = useState('signin')
-  const [showLegacy, setShowLegacy] = useState(false)
-  const [legacyKey, setLegacyKey] = useState('')
   const [forgotSent, setForgotSent] = useState(false)
   const [form, setForm] = useState({ name:'', email:'', password:'' })
   const setField = (k,v) => setForm(prev => ({...prev,[k]:v}))
@@ -239,14 +237,6 @@ function Login({ onLegacyLogin, onGoogle, onEmail, onForgot, busy, error, status
             {signup ? 'Your account works immediately whether the email is verified or not.' : 'You stay signed in on this device until you sign out or the session expires.'}
           </p>
 
-          <button className="legacy-toggle" onClick={() => setShowLegacy(v => !v)}>
-            {showLegacy ? 'Hide Telegram access key' : 'Older Telegram account? Use /webkey'}
-          </button>
-          {showLegacy && <form className="legacy-login" onSubmit={(e) => { e.preventDefault(); onLegacyLogin(legacyKey.trim()) }}>
-            <label>Telegram web access key</label>
-            <textarea rows="3" value={legacyKey} onChange={(e) => setLegacyKey(e.target.value)} placeholder="Paste your /webkey" />
-            <button className="button button-quiet button-block" disabled={!legacyKey.trim() || busy}>Use Telegram key</button>
-          </form>}
         </>}
       </div>
     </div>
@@ -1351,7 +1341,6 @@ function AppCore() {
   />
 
   if (!session) return <Login
-    onLegacyLogin={verify}
     onGoogle={startManagedGoogle}
     onEmail={startEmailAuth}
     onForgot={startForgotPassword}
