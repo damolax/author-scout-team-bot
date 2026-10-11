@@ -2448,6 +2448,65 @@ def _web_message(message_id: int, user_id: int):
         FROM messages m JOIN prospects p ON p.id=m.prospect_id
         WHERE m.id=:i AND p.claimed_by_user_id=:u""",i=message_id,u=user_id)
 
+
+def _letterdesk_norm_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+"," ",str(value or "").casefold()).strip()
+
+def _letterdesk_identity_key(item: dict) -> str:
+    name=_letterdesk_norm_name(item.get("name") or "")
+    country=re.sub(r"[^a-z0-9]+"," ",str(item.get("country") or "").casefold()).strip()
+    import hashlib
+    return "letterdesk:"+hashlib.sha256(f"{name}|{country}".encode("utf-8")).hexdigest()[:32]
+
+def _letterdesk_existing_prospect(item: dict):
+    name=(item.get("name") or "").strip()
+    country=(item.get("country") or "").strip()
+    website=(item.get("website") or "").strip().lower().rstrip("/")
+    email=(item.get("email") or "").strip().lower()
+    key=_letterdesk_identity_key(item)
+    # Shared agency/publisher inboxes are valid for multiple authors. Email alone is never identity here.
+    return legacy.row("""SELECT * FROM prospects
+        WHERE normalized_key=:k
+           OR (:n<>'' AND lower(name)=lower(:n)
+               AND (:c='' OR country='' OR lower(country)=lower(:c)))
+           OR (:w<>'' AND lower(rtrim(website,'/'))=:w AND lower(name)=lower(:n))
+           OR (:e<>'' AND lower(email)=:e AND lower(name)=lower(:n))
+        ORDER BY CASE WHEN normalized_key=:k THEN 0 ELSE 1 END,id
+        LIMIT 1""",k=key,n=name,c=country,w=website,e=email)
+
+def _letterdesk_claim(uid: int, tid: int, item: dict):
+    existing=_letterdesk_existing_prospect(item)
+    if existing:
+        return int(existing["id"]),False,existing
+    key=_letterdesk_identity_key(item)
+    t=legacy.iso()
+    source=(item.get("email_source_url") or "").strip()
+    vals={
+        "k":key,"n":(item.get("name") or "").strip(),"c":(item.get("country") or "").strip(),
+        "g":item.get("genre") or "","w":item.get("website") or "",
+        "e":(item.get("email") or "").strip().lower(),"es":source,
+        "v":"imported_unverified","b":item.get("bio") or "","bk":item.get("books") or "",
+        "a":item.get("recent_activity") or "","s":json.dumps([source] if source else []),
+        "dp":legacy.host(source) if source else "","dst":"workbook_import","dsu":source,
+        "tid":int(tid),"uid":int(uid),"t":t
+    }
+    try:
+        with legacy.engine.begin() as c:
+            r=c.execute(text("""INSERT INTO prospects(
+                normalized_key,name,country,genre,website,email,email_source_url,verification_status,
+                bio,books,recent_activity,source_urls,discovery_platform,discovery_source_type,
+                discovery_source_url,discovery_query,discovery_evidence,discovery_confidence,
+                claimed_team_id,claimed_by_user_id,claimed_at,updated_at)
+                VALUES(:k,:n,:c,:g,:w,:e,:es,:v,:b,:bk,:a,:s,:dp,:dst,:dsu,'','',0,:tid,:uid,:t,:t)
+                RETURNING id"""),vals)
+            pid=int(r.scalar_one())
+            c.execute(text("""INSERT INTO scout_events(telegram_user_id,team_id,prospect_id,created_at)
+                VALUES(:uid,:tid,:pid,:t)"""),{"uid":int(uid),"tid":int(tid),"pid":pid,"t":t})
+        return pid,True,None
+    except Exception:
+        existing=_letterdesk_existing_prospect(item)
+        return (int(existing["id"]),False,existing) if existing else (0,False,None)
+
 @app.post("/api/v1/messages/import")
 async def web_import_chatgpt_results(request: legacy.Request, file: UploadFile=File(...), preview: bool=False):
     from letterdesk_import import parse_upload
@@ -2457,11 +2516,9 @@ async def web_import_chatgpt_results(request: legacy.Request, file: UploadFile=F
     except ValueError as e: raise legacy.HTTPException(status_code=400,detail=str(e))
     issues=list(parsed["issues"]);eligible=[];created=0;ready=0
     for item in parsed["rows"]:
-        existing=legacy.row("SELECT * FROM prospects WHERE lower(email)=:e OR normalized_key=:k LIMIT 1",e=item["email"],k=legacy.pkey(item))
+        existing=_letterdesk_existing_prospect(item)
         if existing and int(existing["claimed_by_user_id"])!=uid:
-            issues.append({"row":item["row"],"name":item["name"],"reason":"Contact unavailable in this workspace"});continue
-        if existing and existing['name'].strip().casefold()!=item['name'].strip().casefold():
-            issues.append({"row":item["row"],"name":item["name"],"reason":"Email already belongs to a different author; review shared inbox"});continue
+            issues.append({"row":item["row"],"name":item["name"],"reason":"This author already belongs to another Author Scout workspace"});continue
         if existing:
             ex=legacy.row("SELECT id,status,reply_status FROM messages WHERE prospect_id=:p ORDER BY id DESC LIMIT 1",p=existing["id"])
             if ex and (ex["status"] in {"sent","sending","sending_web"} or ex.get("reply_status")=="replied"):
@@ -2470,11 +2527,9 @@ async def web_import_chatgpt_results(request: legacy.Request, file: UploadFile=F
     if preview:
         return {"ok":True,"sheet":parsed["sheet"],"columns":parsed["columns"],"eligible":len(eligible),"skipped":len(issues),"issues":issues,"preview":eligible[:8]}
     for item in eligible:
-        pid,is_new,existing=legacy.claim(uid,tid,{**item,"verification_status":"imported_unverified","discovery_source_type":"workbook_import"})
+        pid,is_new,existing=_letterdesk_claim(uid,tid,item)
         if not pid or (existing and int(existing["claimed_by_user_id"])!=uid):
-            issues.append({"row":item["row"],"name":item["name"],"reason":"Contact could not be added"});continue
-        if existing and existing['name'].strip().casefold()!=item['name'].strip().casefold():
-            issues.append({"row":item["row"],"name":item["name"],"reason":"Website or contact matches a different author; review identity"});continue
+            issues.append({"row":item["row"],"name":item["name"],"reason":"Author could not be added to this workspace"});continue
         ex=legacy.row("SELECT id,status,reply_status FROM messages WHERE prospect_id=:p ORDER BY id DESC LIMIT 1",p=pid)
         if ex and (ex['status'] in {'sent','sending','sending_web'} or ex.get('reply_status')=='replied'):
             issues.append({"row":item["row"],"name":item["name"],"reason":"Sent or active conversation preserved"});continue
