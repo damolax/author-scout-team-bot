@@ -24,9 +24,9 @@ jobs:
           python - <<'PY'
           from letterdesk_import import parse_upload
           csv_data = (
-              "Original Row,Author,Recorded Email,Readiness / Hold,Subject,Author-language Message,English Review,Primary Research Source\n"
-              "1,Author One,shared@example.com,READY,Subject One,Primary one,English one,https://example.com/a\n"
-              "2,Author Two,shared@example.com,READY,Subject Two,Primary two,English two,https://example.com/b\n"
+              "Original Row,Author,Public recorded contact,Contact type,Routing caveat,Earlier work,Updated evidence / research finding,Strongest new source URL,Email source URL,Older book / bio source URL,Evidence tier,Research checked,Send gate,Message language,Personalized subject,Author-language first message,English review version,Evidence anchor / note,Pivotal question (English),Email compose link\n"
+              "1,Author One,shared@example.com,Agency,,,Recent activity,https://example.com/a,https://example.com/contact,,,2026-10-11,READY,English,Subject One,Primary one,English one,,,\n"
+              "2,Author Two,shared@example.com,Agency,,,Recent activity,https://example.com/b,https://example.com/contact,,,2026-10-11,READY,English,Subject Two,Primary two,English two,,,\n"
           ).encode("utf-8")
           parsed = parse_upload(csv_data, "letterdesk-real-headers.csv")
           assert len(parsed["rows"]) == 2, parsed
