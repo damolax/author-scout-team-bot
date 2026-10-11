@@ -6,3 +6,7 @@ __pycache__/
 *.db
 web/node_modules/
 web/dist/
+
+# Generated extension distribution
+web/public/letterdesk-extension.zip
+/web/node_modules

@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+const saved={},fills=[];let listener;
+globalThis.chrome={runtime:{id:'ext',getManifest:()=>({version:'1.0.0'}),onMessage:{addListener:fn=>listener=fn}},tabs:{query:async()=>[{id:1,windowId:9},{id:2,windowId:9}],sendMessage:async(id,m)=>{if(m.type==='LD_ACCOUNT')return {email:id===1?'one@example.com':'two@example.com'};fills.push({id,m});return {ok:true}},update:async()=>{}},windows:{update:async()=>{}},storage:{session:{get:async key=>({[key]:saved[key]}),set:async obj=>Object.assign(saved,obj)}}};
+await import('../extension/worker.js');
+const sender={id:'ext',url:'https://author-scout-team-bot.vercel.app/'};
+const call=(m,s=sender)=>new Promise(resolve=>listener(m,s,resolve));
+const draft={id:'r1',account:'two@example.com',to:'reader@example.com',subject:'Hello',body:'Exact message'};
+test('routes only to the matching account and blocks duplicate request',async()=>{assert.equal((await call({type:'LD_PREPARE',draft,tabId:2})).ok,true);assert.equal(fills[0].id,2);assert.equal((await call({type:'LD_PREPARE',draft,tabId:2})).ok,false);assert.equal(fills.length,1)});
+test('mismatched tab or absent account never fills',async()=>{assert.equal((await call({type:'LD_PREPARE',draft:{...draft,id:'r2'},tabId:1})).ok,false);assert.equal((await call({type:'LD_PREPARE',draft:{...draft,id:'r3',account:'missing@example.com'}})).ok,false);assert.equal(fills.length,1)});
+test('rejects untrusted page',async()=>{assert.equal((await call({type:'LD_ACCOUNTS'},{id:'ext',url:'https://evil.test'})).ok,false)});

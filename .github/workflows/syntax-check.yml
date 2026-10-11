@@ -47,5 +47,7 @@ jobs:
           node-version: "22"
       - name: Install web dependencies
         run: npm install
+      - name: Check extension account routing
+        run: node --test ../tests/test_extension.mjs ../tests/test_extension_worker.mjs
       - name: Build Vite dashboard
         run: npm run build
