@@ -1832,17 +1832,15 @@ def _web_auth_from_key(key: str) -> dict:
         payload=legacy.serializer.loads(key,max_age=WEB_KEY_MAX_AGE_SECONDS)
     except Exception:
         raise legacy.HTTPException(status_code=401, detail="Invalid or expired web access key")
-    if not isinstance(payload,dict) or payload.get("scope") not in {"web","web_login"}:
+    if not isinstance(payload,dict) or payload.get("scope")!="web_login":
         raise legacy.HTTPException(status_code=401, detail="Invalid web session")
-    if payload.get("scope")=="web_login":
-        account=legacy.row("SELECT * FROM web_accounts WHERE id=:i",i=int(payload.get("account_id") or 0))
-        if not account:
-            raise legacy.HTTPException(status_code=401,detail="Web account no longer exists")
-        return {"scope":"web_login","admin":False,"account_id":int(account["id"]),
-                "team_id":int(account["team_id"]),"uid":int(account["app_user_id"]),
-                "email":account["email"],"display_name":account.get("display_name") or "",
-                "telegram_user_id":account.get("telegram_user_id")}
-    return {"scope":"web","admin":False,"team_id":int(payload.get("team_id") or 0),"uid":int(payload.get("uid") or 0)}
+    account=legacy.row("SELECT * FROM web_accounts WHERE id=:i",i=int(payload.get("account_id") or 0))
+    if not account:
+        raise legacy.HTTPException(status_code=401,detail="Web account no longer exists")
+    return {"scope":"web_login","admin":False,"account_id":int(account["id"]),
+            "team_id":int(account["team_id"]),"uid":int(account["app_user_id"]),
+            "email":account["email"],"display_name":account.get("display_name") or "",
+            "telegram_user_id":account.get("telegram_user_id")}
 
 def _web_auth(request) -> dict:
     key=request.headers.get("x-author-scout-key","")
@@ -2108,75 +2106,106 @@ async def web_health():
     return {"ok":True,"version":app.version,"service":"author-scout"}
 
 
-def _link_telegram_account(code: str, telegram_uid: int) -> tuple[bool,str]:
-    link=legacy.row("""SELECT l.*,a.app_user_id,a.team_id account_team,a.telegram_user_id existing_tg,a.id account_id
-        FROM web_telegram_links l JOIN web_accounts a ON a.id=l.web_account_id
-        WHERE upper(l.code)=upper(:c) AND l.status='pending' LIMIT 1""",c=(code or "").strip())
-    if not link:
-        return False,"That link code is invalid or already used."
-    if link["expires_at"] < legacy.iso():
-        legacy.execq("UPDATE web_telegram_links SET status='expired' WHERE id=:i",i=link["id"])
-        return False,"That link code has expired. Generate a new one from the web app."
-    if link.get("existing_tg") and int(link["existing_tg"])!=int(telegram_uid):
-        return False,"That web account is already linked to another Telegram account."
-    old_uid=int(link["app_user_id"]); old_team=int(link["account_team"])
-    tg_user=legacy.row("SELECT * FROM users WHERE telegram_user_id=:u",u=telegram_uid)
+
+def _attach_telegram_to_web_account(account_id: int, telegram_uid: int) -> tuple[bool,str]:
+    account=legacy.row("SELECT * FROM web_accounts WHERE id=:i",i=int(account_id))
+    if not account:
+        return False,"Author Scout account not found."
+    existing_tg=account.get("telegram_user_id")
+    if existing_tg:
+        if int(existing_tg)==int(telegram_uid):
+            return True,"Telegram is already linked to this Author Scout workspace."
+        return False,"This Author Scout account is already linked to another Telegram account."
+
+    other=legacy.row("SELECT id FROM web_accounts WHERE telegram_user_id=:u AND id<>:i LIMIT 1",
+                     u=int(telegram_uid),i=int(account_id))
+    if other:
+        return False,"That Telegram account is already linked to another Author Scout account."
+
+    old_uid=int(account["app_user_id"])
+    old_team=int(account["team_id"])
+    tg_user=legacy.row("SELECT * FROM users WHERE telegram_user_id=:u",u=int(telegram_uid))
     tg_team=int(tg_user.get("team_id") or 0) if tg_user else 0
+    # Preserve an existing Telegram workspace when present; otherwise attach Telegram to the web workspace.
     target_team=tg_team or old_team
     now=legacy.iso()
+
     with legacy.engine.begin() as c:
-        # Preserve an existing Telegram workspace when there is one; otherwise attach Telegram to the web workspace.
         if not tg_user:
             c.execute(text("""INSERT INTO users(telegram_user_id,username,first_name,team_id,created_at,updated_at)
-                VALUES(:u,'','',:t,:d,:d)"""),{"u":telegram_uid,"t":target_team,"d":now})
+                VALUES(:u,'','',:t,:d,:d)"""),{"u":int(telegram_uid),"t":target_team,"d":now})
         else:
             c.execute(text("UPDATE users SET team_id=:t,updated_at=:d WHERE telegram_user_id=:u"),
-                      {"t":target_team,"d":now,"u":telegram_uid})
-        if old_uid!=telegram_uid:
-            # Move web-owned records to the linked Telegram identity/workspace.
-            for sql,params in [
-                ("UPDATE prospects SET claimed_by_user_id=:new,claimed_team_id=:team,updated_at=:d WHERE claimed_by_user_id=:old",{}),
-                ("UPDATE web_research_jobs SET requested_by_user_id=:new,team_id=:team,updated_at=:d WHERE requested_by_user_id=:old",{}),
-                ("UPDATE messages SET imported_by_user_id=:new,team_id=:team,updated_at=:d WHERE imported_by_user_id=:old",{}),
-                ("UPDATE scout_events SET telegram_user_id=:new,team_id=:team WHERE telegram_user_id=:old",{}),
-                ("UPDATE ai_research_jobs SET user_id=:new,team_id=:team,updated_at=:d WHERE user_id=:old",{}),
-                ("UPDATE connection_events SET telegram_user_id=:new,team_id=:team WHERE telegram_user_id=:old",{}),
+                      {"t":target_team,"d":now,"u":int(telegram_uid)})
+
+        if old_uid!=int(telegram_uid):
+            for sql in [
+                "UPDATE prospects SET claimed_by_user_id=:new,claimed_team_id=:team,updated_at=:d WHERE claimed_by_user_id=:old",
+                "UPDATE web_research_jobs SET requested_by_user_id=:new,team_id=:team,updated_at=:d WHERE requested_by_user_id=:old",
+                "UPDATE messages SET imported_by_user_id=:new,team_id=:team,updated_at=:d WHERE imported_by_user_id=:old",
+                "UPDATE scout_events SET telegram_user_id=:new,team_id=:team WHERE telegram_user_id=:old",
+                "UPDATE ai_research_jobs SET user_id=:new,team_id=:team,updated_at=:d WHERE user_id=:old",
+                "UPDATE connection_events SET telegram_user_id=:new,team_id=:team WHERE telegram_user_id=:old",
             ]:
-                c.execute(text(sql),{"new":telegram_uid,"team":target_team,"d":now,"old":old_uid,**params})
-            # Connection assignments can conflict on (profile_id,team_id), so only move non-conflicting rows.
+                c.execute(text(sql),{"new":int(telegram_uid),"team":target_team,"d":now,"old":old_uid})
+
             c.execute(text("""DELETE FROM connection_assignments ca
                 USING connection_assignments other
                 WHERE ca.assigned_user_id=:old AND other.team_id=:team
                   AND other.profile_id=ca.profile_id AND ca.id<>other.id"""),
                 {"old":old_uid,"team":target_team})
-            c.execute(text("""UPDATE connection_assignments SET assigned_user_id=:new,team_id=:team,updated_at=:d
-                WHERE assigned_user_id=:old"""),{"new":telegram_uid,"team":target_team,"d":now,"old":old_uid})
-            oldpref=c.execute(text("SELECT telegram_user_id FROM connection_preferences WHERE telegram_user_id=:u"),{"u":old_uid}).first()
-            newpref=c.execute(text("SELECT telegram_user_id FROM connection_preferences WHERE telegram_user_id=:u"),{"u":telegram_uid}).first()
+            c.execute(text("""UPDATE connection_assignments
+                SET assigned_user_id=:new,team_id=:team,updated_at=:d
+                WHERE assigned_user_id=:old"""),
+                {"new":int(telegram_uid),"team":target_team,"d":now,"old":old_uid})
+
+            oldpref=c.execute(text("SELECT telegram_user_id FROM connection_preferences WHERE telegram_user_id=:u"),
+                              {"u":old_uid}).first()
+            newpref=c.execute(text("SELECT telegram_user_id FROM connection_preferences WHERE telegram_user_id=:u"),
+                              {"u":int(telegram_uid)}).first()
             if oldpref and not newpref:
-                c.execute(text("UPDATE connection_preferences SET telegram_user_id=:new,team_id=:team,updated_at=:d WHERE telegram_user_id=:old"),
-                          {"new":telegram_uid,"team":target_team,"d":now,"old":old_uid})
+                c.execute(text("""UPDATE connection_preferences
+                    SET telegram_user_id=:new,team_id=:team,updated_at=:d
+                    WHERE telegram_user_id=:old"""),
+                    {"new":int(telegram_uid),"team":target_team,"d":now,"old":old_uid})
             elif oldpref and newpref:
                 c.execute(text("DELETE FROM connection_preferences WHERE telegram_user_id=:old"),{"old":old_uid})
-        c.execute(text("""UPDATE web_accounts SET app_user_id=:u,team_id=:t,telegram_user_id=:u,updated_at=:d
-            WHERE id=:i"""),{"u":telegram_uid,"t":target_team,"d":now,"i":link["account_id"]})
-        c.execute(text("UPDATE web_telegram_links SET status='used',used_at=:d WHERE id=:i"),{"d":now,"i":link["id"]})
+
+        c.execute(text("""UPDATE web_accounts
+            SET app_user_id=:u,team_id=:t,telegram_user_id=:u,updated_at=:d
+            WHERE id=:i"""),
+            {"u":int(telegram_uid),"t":target_team,"d":now,"i":int(account_id)})
+
     return True,"Telegram is now linked to your Author Scout workspace."
 
-@app.post("/api/v1/telegram/link-code")
-async def web_telegram_link_code(request: legacy.Request):
+@app.post("/api/v1/telegram/link-with-key")
+async def web_telegram_link_with_key(request: legacy.Request):
     ctx=_web_auth(request)
     if ctx.get("scope")!="web_login" or not ctx.get("account_id"):
-        raise legacy.HTTPException(status_code=400,detail="Sign in with Google before linking Telegram")
-    if ctx.get("telegram_user_id") or int(ctx.get("uid") or 0)>0:
-        return {"ok":True,"linked":True,"code":"","message":"Telegram is already linked to this workspace."}
-    code=legacy.secrets.token_hex(4).upper()
-    now=legacy.iso(); exp=legacy.iso(legacy.now()+timedelta(minutes=15))
-    legacy.execq("""INSERT INTO web_telegram_links(code,web_account_id,app_user_id,team_id,status,expires_at,created_at,used_at)
-        VALUES(:c,:a,:u,:t,'pending',:e,:d,'')""",
-        c=code,a=ctx["account_id"],u=ctx["uid"],t=ctx["team_id"],e=exp,d=now)
-    return {"ok":True,"linked":False,"code":code,"expires_at":exp,
-            "command":f"/linkweb {code}","bot":"@Authorscoutbot"}
+        raise legacy.HTTPException(status_code=401,detail="Sign in to Author Scout before connecting Telegram.")
+    if ctx.get("telegram_user_id"):
+        return {"ok":True,"linked":True,"message":"Telegram is already linked to this workspace."}
+
+    body=await request.json()
+    link_key=re.sub(r"\s+","",str(body.get("key") or "")).strip()
+    if not link_key:
+        raise legacy.HTTPException(status_code=400,detail="Paste the Telegram connection key from /webkey.")
+
+    try:
+        payload=legacy.serializer.loads(link_key,max_age=900)
+    except Exception:
+        raise legacy.HTTPException(status_code=400,detail="That Telegram key is invalid or expired. Send /webkey again in Telegram.")
+
+    if not isinstance(payload,dict) or payload.get("scope")!="telegram_link":
+        raise legacy.HTTPException(status_code=400,detail="That key cannot be used to connect Telegram.")
+    telegram_uid=int(payload.get("uid") or 0)
+    if telegram_uid<=0:
+        raise legacy.HTTPException(status_code=400,detail="Invalid Telegram connection key.")
+
+    ok,msg=await asyncio.to_thread(_attach_telegram_to_web_account,int(ctx["account_id"]),telegram_uid)
+    if not ok:
+        raise legacy.HTTPException(status_code=409,detail=msg)
+    return {"ok":True,"linked":True,"message":msg,"telegram_user_id":telegram_uid}
 
 
 @app.get("/api/v1/session")
@@ -3295,13 +3324,13 @@ async def enhanced_handle(update: dict):
                 return await show_companion_help(chat)
             if cmd == "/authors":
                 return await show_user_authors(chat,uid)
-            if cmd == "/linkweb":
-                if not arg.strip():
-                    return await legacy.send(chat,"Use <code>/linkweb CODE</code> with the code shown in your Author Scout web account.")
-                ok,msg=await asyncio.to_thread(_link_telegram_account,arg.strip(),uid)
-                if ok:
-                    return await legacy.send(chat,"✅ <b>Telegram linked</b>\n\n"+legacy.esc(msg)+"\nYour web app and Telegram companion now use the same workspace.",enhanced_main_menu())
-                return await legacy.send(chat,"⚠️ "+legacy.esc(msg))
+            if cmd == "/webkey":
+                token=legacy.serializer.dumps({"scope":"telegram_link","uid":int(uid)})
+                return await legacy.send(chat,
+                    "<b>🔗 Connect Telegram to Author Scout</b>\n\n"
+                    "Copy this key, then open Author Scout on the web and paste it under <b>Connect Telegram</b>.\n\n"
+                    f"<code>{legacy.esc(token)}</code>\n\n"
+                    "This key is only for linking Telegram. It cannot sign in to the website and expires in 15 minutes.")
             if cmd == "/indexstatus":
                 return await show_index_status(chat)
             if cmd == "/scoutstatus":
@@ -3334,7 +3363,7 @@ async def connection_startup():
             await legacy.tg("setMyCommands", {"commands": json.dumps([
                 {"command": "menu", "description": "Open the Author Scout companion menu"},
                 {"command": "webapp", "description": "Open the full Author Scout web app"},
-                {"command": "linkweb", "description": "Link Telegram to your signed-in web workspace"},
+                {"command": "webkey", "description": "Generate a Telegram connection key for Author Scout Web"},
                 {"command": "find", "description": "Scout authors using filters or natural language"},
                 {"command": "indexstatus", "description": "Show source index and author reservoir"},
                 {"command": "scoutstatus", "description": "Show your active Scout progress and time remaining"},
