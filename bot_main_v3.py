@@ -2860,7 +2860,10 @@ async def web_message_send_smtp(request: legacy.Request,message_id:int):
         raise legacy.HTTPException(status_code=400,detail="Choose an active sender account.")
     recipient=(m.get("recipient") or "").strip()
     subject=(m.get("subject") or "").strip()
-    message_body=(m.get("body") or m.get("body_english") or "").strip()
+    language=str(body.get("language") or "body").strip()
+    message_body=(m.get("body_english") if language=="body_english" else m.get("body") or "").strip()
+    if not message_body:
+        message_body=(m.get("body") or m.get("body_english") or "").strip()
     if not _smtp_email_ok(recipient) or not subject or not message_body:
         raise legacy.HTTPException(status_code=400,detail="Recipient, subject, and message are required.")
     try:
