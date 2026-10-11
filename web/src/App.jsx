@@ -243,7 +243,7 @@ function Login({ onGoogle, onEmail, onForgot, busy, error, status }) {
   )
 }
 
-function ResetPasswordScreen({ token, errorCode, onDone }) {
+function ResetPasswordScreen({ token, errorCode }) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
@@ -277,7 +277,7 @@ function ResetPasswordScreen({ token, errorCode, onDone }) {
             <div className="forgot-success-icon">✓</div>
             <h1>Password updated</h1>
             <p>Your new password is ready. You can sign in to Author Scout now.</p>
-            <button className="button button-auth-email button-block" onClick={onDone}>Continue to sign in</button>
+            <a className="button button-auth-email button-block" href="/?signin=1">Continue to sign in</a>
           </div>
         </> : <>
           <h1>Choose a new password</h1>
@@ -298,7 +298,7 @@ function ResetPasswordScreen({ token, errorCode, onDone }) {
               {busy ? 'Updating password…' : 'Set new password'}
             </button>
           </form>
-          <button className="auth-switch" onClick={onDone}>Back to sign in</button>
+          <a className="auth-switch" href="/?signin=1">Back to sign in</a>
         </>}
       </div>
     </div>
@@ -1288,6 +1288,15 @@ function AppCore() {
     let cancelled=false
     const boot=async () => {
       const params=new URLSearchParams(window.location.search)
+      // Recovery pages must not race automatic restoration of an old session.
+      if (window.location.pathname === '/reset-password' || params.has('token') || params.has('error') || params.get('signin') === '1') {
+        if (params.get('signin') === '1') {
+          localStorage.removeItem('authorScoutSession')
+          setKeyValue('')
+        }
+        setChecking(false)
+        return
+      }
       const incoming=params.get('session')
       const authError=params.get('auth_error')
 
@@ -1341,13 +1350,7 @@ function AppCore() {
   if (!session && isResetPage) return <ResetPasswordScreen
     token={resetParams.get('token') || ''}
     errorCode={resetParams.get('error') || ''}
-    onDone={() => {
-      window.history.replaceState({}, document.title, '/')
-      setLoginError('')
-      setLoginStatus('')
-      setKeyValue('')
-      setSession(null)
-    }}
+
   />
 
   if (!session) return <Login
