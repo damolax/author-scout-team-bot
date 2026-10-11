@@ -2689,6 +2689,195 @@ async def web_message_status(request: legacy.Request, message_id: int):
         raise legacy.HTTPException(status_code=400,detail="Status must be sent, replied, or ready")
     return {"ok":True,"message":_web_message(message_id,uid)}
 
+
+def _smtp_sender_public(row: dict) -> dict:
+    return {
+        "id":int(row["id"]),
+        "label":row.get("label") or "",
+        "sender_name":row.get("sender_name") or "",
+        "email":row.get("email") or "",
+        "reply_to":row.get("reply_to") or "",
+        "smtp_host":row.get("smtp_host") or "",
+        "smtp_port":int(row.get("smtp_port") or 587),
+        "smtp_username":row.get("smtp_username") or "",
+        "security":row.get("security") or "starttls",
+        "enabled":bool(row.get("enabled")),
+        "cooldown_seconds":int(row.get("cooldown_seconds") or SMTP_MIN_COOLDOWN_SECONDS),
+        "daily_limit":int(row.get("daily_limit") or 100),
+        "sent_today":int(row.get("sent_today") or 0),
+        "last_sent_at":row.get("last_sent_at") or "",
+        "last_error":row.get("last_error") or "",
+        "has_password":bool(row.get("smtp_password_enc")),
+    }
+
+def _smtp_email_ok(value: str) -> bool:
+    return bool(re.fullmatch(r'[^\s@<>;,]+@[^\s@<>;,]+\.[^\s@<>;,]+',str(value or "").strip()))
+
+def _smtp_send_sync(account: dict, recipient: str, subject: str, body: str):
+    host=str(account.get("smtp_host") or "").strip()
+    port=int(account.get("smtp_port") or 587)
+    username=str(account.get("smtp_username") or "").strip()
+    password=legacy.dec(account["smtp_password_enc"])
+    security=str(account.get("security") or "starttls").strip().lower()
+    if security not in {"ssl","starttls","none"}:
+        raise RuntimeError("Unsupported SMTP security mode")
+    msg=legacy.EmailMessage()
+    sender_email=str(account.get("email") or "").strip()
+    sender_name=str(account.get("sender_name") or "").strip()
+    msg["From"]=f"{sender_name} <{sender_email}>" if sender_name else sender_email
+    msg["To"]=recipient
+    msg["Subject"]=subject
+    reply_to=str(account.get("reply_to") or "").strip()
+    if reply_to:
+        msg["Reply-To"]=reply_to
+    msg.set_content(body)
+    context=ssl.create_default_context()
+    smtp=None
+    try:
+        if security=="ssl":
+            smtp=smtplib.SMTP_SSL(host,port,timeout=30,context=context)
+        else:
+            smtp=smtplib.SMTP(host,port,timeout=30)
+            smtp.ehlo()
+            if security=="starttls":
+                smtp.starttls(context=context)
+                smtp.ehlo()
+        if username:
+            smtp.login(username,password)
+        smtp.send_message(msg)
+    finally:
+        if smtp is not None:
+            try:smtp.quit()
+            except Exception:pass
+
+def _smtp_sender_row(team_id: int, sender_id: int):
+    return legacy.row("SELECT * FROM smtp_sender_accounts WHERE id=:i AND team_id=:t",i=sender_id,t=team_id)
+
+@app.get("/api/v1/senders")
+async def web_smtp_senders(request: legacy.Request):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    rows=legacy.rows("SELECT * FROM smtp_sender_accounts WHERE team_id=:t ORDER BY enabled DESC,id",t=tid)
+    return {"ok":True,"senders":[_smtp_sender_public(r) for r in rows]}
+
+@app.post("/api/v1/senders")
+async def web_smtp_sender_create(request: legacy.Request):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"]);uid=_web_actor_uid(ctx,team)
+    if not legacy.fernet:
+        raise legacy.HTTPException(status_code=503,detail="Secure sender credential storage is not configured on the server.")
+    body=await request.json()
+    email=str(body.get("email") or "").strip().lower()
+    reply_to=str(body.get("reply_to") or "").strip().lower()
+    host=str(body.get("smtp_host") or "").strip()
+    username=str(body.get("smtp_username") or email).strip()
+    password=str(body.get("smtp_password") or "")
+    security=str(body.get("security") or "starttls").strip().lower()
+    try:port=int(body.get("smtp_port") or (465 if security=="ssl" else 587))
+    except:port=0
+    try:cooldown=max(SMTP_MIN_COOLDOWN_SECONDS,int(body.get("cooldown_seconds") or SMTP_MIN_COOLDOWN_SECONDS))
+    except:cooldown=SMTP_MIN_COOLDOWN_SECONDS
+    try:daily=max(1,min(SMTP_MAX_DAILY_PER_SENDER,int(body.get("daily_limit") or 100)))
+    except:daily=100
+    if not _smtp_email_ok(email):
+        raise legacy.HTTPException(status_code=400,detail="Enter a valid sender email address.")
+    if reply_to and not _smtp_email_ok(reply_to):
+        raise legacy.HTTPException(status_code=400,detail="Reply-To must be a valid email address.")
+    if not host or re.search(r'[\s/:]',host) or not (1<=port<=65535):
+        raise legacy.HTTPException(status_code=400,detail="Enter a valid SMTP host and port.")
+    if security not in {"ssl","starttls","none"}:
+        raise legacy.HTTPException(status_code=400,detail="Security must be SSL, STARTTLS, or None.")
+    if not username or not password:
+        raise legacy.HTTPException(status_code=400,detail="SMTP username and password are required.")
+    t=legacy.iso();enc=legacy.enc(password)
+    try:
+        with legacy.engine.begin() as c:
+            r=c.execute(text("""INSERT INTO smtp_sender_accounts(
+                team_id,user_id,label,sender_name,email,reply_to,smtp_host,smtp_port,smtp_username,smtp_password_enc,
+                security,enabled,cooldown_seconds,daily_limit,sent_today,sent_day,last_sent_at,next_eligible_at,last_error,created_at,updated_at)
+                VALUES(:t,:u,:l,:sn,:e,:r,:h,:p,:un,:pw,:sec,1,:cd,:dl,0,'','','','',:d,:d)
+                RETURNING id"""),
+                {"t":tid,"u":uid,"l":str(body.get("label") or "").strip(),"sn":str(body.get("sender_name") or "").strip(),
+                 "e":email,"r":reply_to,"h":host,"p":port,"un":username,"pw":enc,"sec":security,
+                 "cd":cooldown,"dl":daily,"d":t})
+            sid=int(r.scalar_one())
+    except Exception as e:
+        if "unique" in str(e).lower():
+            raise legacy.HTTPException(status_code=409,detail="That sender email is already added to this workspace.")
+        raise
+    return {"ok":True,"sender":_smtp_sender_public(_smtp_sender_row(tid,sid))}
+
+@app.put("/api/v1/senders/{sender_id}")
+async def web_smtp_sender_update(request: legacy.Request,sender_id:int):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    current=_smtp_sender_row(tid,sender_id)
+    if not current:raise legacy.HTTPException(status_code=404,detail="Sender account not found.")
+    body=await request.json()
+    enabled=1 if bool(body.get("enabled",bool(current["enabled"]))) else 0
+    pw=str(body.get("smtp_password") or "")
+    enc=legacy.enc(pw) if pw else current["smtp_password_enc"]
+    legacy.execq("""UPDATE smtp_sender_accounts SET label=:l,sender_name=:sn,reply_to=:r,
+        smtp_host=:h,smtp_port=:p,smtp_username=:un,smtp_password_enc=:pw,security=:sec,
+        enabled=:en,updated_at=:d WHERE id=:i AND team_id=:t""",
+        l=str(body.get("label",current.get("label") or "") or "").strip(),
+        sn=str(body.get("sender_name",current.get("sender_name") or "") or "").strip(),
+        r=str(body.get("reply_to",current.get("reply_to") or "") or "").strip().lower(),
+        h=str(body.get("smtp_host",current["smtp_host"]) or "").strip(),
+        p=int(body.get("smtp_port",current["smtp_port"])),
+        un=str(body.get("smtp_username",current["smtp_username"]) or "").strip(),
+        pw=enc,sec=str(body.get("security",current["security"]) or "starttls").strip().lower(),
+        en=enabled,d=legacy.iso(),i=sender_id,t=tid)
+    return {"ok":True,"sender":_smtp_sender_public(_smtp_sender_row(tid,sender_id))}
+
+@app.post("/api/v1/senders/{sender_id}/test")
+async def web_smtp_sender_test(request: legacy.Request,sender_id:int):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
+    sender=_smtp_sender_row(tid,sender_id)
+    if not sender:raise legacy.HTTPException(status_code=404,detail="Sender account not found.")
+    body=await request.json()
+    recipient=str(body.get("recipient") or sender["email"]).strip().lower()
+    if not _smtp_email_ok(recipient):
+        raise legacy.HTTPException(status_code=400,detail="Enter a valid test recipient.")
+    try:
+        await asyncio.to_thread(_smtp_send_sync,sender,recipient,"Author Scout SMTP test",
+                                "This is a sender-account test from Author Scout Letter Desk.")
+        legacy.execq("UPDATE smtp_sender_accounts SET last_error='',updated_at=:d WHERE id=:i",d=legacy.iso(),i=sender_id)
+    except Exception as e:
+        legacy.execq("UPDATE smtp_sender_accounts SET last_error=:e,updated_at=:d WHERE id=:i",
+                     e=f"{type(e).__name__}: {e}"[:1200],d=legacy.iso(),i=sender_id)
+        raise legacy.HTTPException(status_code=502,detail=f"SMTP test failed: {type(e).__name__}: {str(e)[:300]}")
+    return {"ok":True,"sent_to":recipient}
+
+@app.post("/api/v1/messages/{message_id}/send-smtp")
+async def web_message_send_smtp(request: legacy.Request,message_id:int):
+    ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"]);uid=_web_actor_uid(ctx,team)
+    m=_web_message(message_id,uid)
+    if not m:raise legacy.HTTPException(status_code=404,detail="Message not found.")
+    if m.get("status")=="sent":
+        raise legacy.HTTPException(status_code=409,detail="This message is already marked sent.")
+    body=await request.json()
+    sender_id=int(body.get("sender_id") or 0)
+    sender=_smtp_sender_row(tid,sender_id)
+    if not sender or not sender.get("enabled"):
+        raise legacy.HTTPException(status_code=400,detail="Choose an active sender account.")
+    recipient=(m.get("recipient") or "").strip()
+    subject=(m.get("subject") or "").strip()
+    message_body=(m.get("body") or m.get("body_english") or "").strip()
+    if not _smtp_email_ok(recipient) or not subject or not message_body:
+        raise legacy.HTTPException(status_code=400,detail="Recipient, subject, and message are required.")
+    try:
+        await asyncio.to_thread(_smtp_send_sync,sender,recipient,subject,message_body)
+    except Exception as e:
+        legacy.execq("UPDATE smtp_sender_accounts SET last_error=:e,updated_at=:d WHERE id=:i",
+                     e=f"{type(e).__name__}: {e}"[:1200],d=legacy.iso(),i=sender_id)
+        raise legacy.HTTPException(status_code=502,detail=f"Send failed: {type(e).__name__}: {str(e)[:300]}")
+    t=legacy.iso()
+    legacy.execq("""UPDATE messages SET status='sent',sender_email=:e,sent_by_user_id=:u,sent_at=:d,
+        updated_at=:d,sent_via='smtp_web',auto_sent=0
+        WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",
+        e=sender["email"],u=uid,d=t,i=message_id)
+    legacy.execq("UPDATE smtp_sender_accounts SET last_sent_at=:d,last_error='',updated_at=:d WHERE id=:i",
+                 d=t,i=sender_id)
+    return {"ok":True,"sent":True,"sender_email":sender["email"],"message":_web_message(message_id,uid)}
+
 @app.post("/api/v1/messages/{message_id}/send")
 async def web_message_send(request: legacy.Request, message_id: int):
     ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
