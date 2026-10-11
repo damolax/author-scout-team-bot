@@ -2719,8 +2719,11 @@ def _smtp_send_sync(account: dict, recipient: str, subject: str, body: str):
     username=str(account.get("smtp_username") or "").strip()
     password=legacy.dec(account["smtp_password_enc"])
     security=str(account.get("security") or "starttls").strip().lower()
-    if security not in {"ssl","starttls","none"}:
-        raise RuntimeError("Unsupported SMTP security mode")
+    if security == "cloudflare_api":
+        from cloudflare_mail import send
+        return send(account, password, recipient, subject, body)
+    if security not in {"ssl","starttls"}:
+        raise RuntimeError("Choose SSL/TLS or STARTTLS for encrypted sending")
     msg=legacy.EmailMessage()
     sender_email=str(account.get("email") or "").strip()
     sender_name=str(account.get("sender_name") or "").strip()
@@ -2783,10 +2786,12 @@ async def web_smtp_sender_create(request: legacy.Request):
         raise legacy.HTTPException(status_code=400,detail="Reply-To must be a valid email address.")
     if not host or re.search(r'[\s/:]',host) or not (1<=port<=65535):
         raise legacy.HTTPException(status_code=400,detail="Enter a valid SMTP host and port.")
-    if security not in {"ssl","starttls","none"}:
-        raise legacy.HTTPException(status_code=400,detail="Security must be SSL, STARTTLS, or None.")
+    if security not in {"ssl","starttls","cloudflare_api"}:
+        raise legacy.HTTPException(status_code=400,detail="Choose SSL/TLS, STARTTLS, or Cloudflare API.")
     if not username or not password:
         raise legacy.HTTPException(status_code=400,detail="SMTP username and password are required.")
+    if security == "cloudflare_api" and not re.fullmatch(r"[a-fA-F0-9]{32}", username):
+        raise legacy.HTTPException(status_code=400,detail="Enter the 32-character Cloudflare Account ID.")
     t=legacy.iso();enc=legacy.enc(password)
     try:
         with legacy.engine.begin() as c:
@@ -2811,6 +2816,11 @@ async def web_smtp_sender_update(request: legacy.Request,sender_id:int):
     current=_smtp_sender_row(tid,sender_id)
     if not current:raise legacy.HTTPException(status_code=404,detail="Sender account not found.")
     body=await request.json()
+    mode=str(body.get("security",current["security"]) or "starttls").strip().lower()
+    if mode not in {"ssl","starttls","cloudflare_api"}:
+        raise legacy.HTTPException(status_code=400,detail="Choose an encrypted sending connection.")
+    if mode == "cloudflare_api" and not re.fullmatch(r"[a-fA-F0-9]{32}", str(body.get("smtp_username",current["smtp_username"]) or "").strip()):
+        raise legacy.HTTPException(status_code=400,detail="Enter the 32-character Cloudflare Account ID.")
     enabled=1 if bool(body.get("enabled",bool(current["enabled"]))) else 0
     pw=str(body.get("smtp_password") or "")
     enc=legacy.enc(pw) if pw else current["smtp_password_enc"]
@@ -2861,7 +2871,7 @@ async def web_message_send_smtp(request: legacy.Request,message_id:int):
     recipient=(m.get("recipient") or "").strip()
     subject=(m.get("subject") or "").strip()
     language=str(body.get("language") or "body").strip()
-    message_body=(m.get("body_english") if language=="body_english" else m.get("body") or "").strip()
+    message_body=((m.get("body_english") if language=="body_english" else m.get("body")) or "").strip()
     if not message_body:
         message_body=(m.get("body") or m.get("body_english") or "").strip()
     if not _smtp_email_ok(recipient) or not subject or not message_body:
