@@ -7,20 +7,20 @@ from itertools import islice
 from openpyxl import load_workbook
 
 ALIASES = {
- 'id':['Author Scout ID','Canonical Author ID','Source Row ID'],
+ 'id':['Author Scout ID','Canonical Author ID','Source Row ID','Original Row','Original Row ID'],
  'name':['Author','Author Name','Name','Author Name — Verified','Author Name — Bot'],
- 'email':['Contact Email','Email','Verified Email','Public Contact Email','Public Email','Public Professional Email','Verified Public Email','Author Email','Public Professional Email — Bot'],
+ 'email':['Contact Email','Email','Verified Email','Public Contact Email','Public Email','Public Professional Email','Verified Public Email','Author Email','Public Professional Email — Bot','Recorded Email','Recipient Email','Email Address','To'],
  'website':['Website / Profile','Website','Official Website','Verified Official Website','Author Website'],
- 'email_source_url':['Email Source','Email Source URL','Exact Email Source URL','Contact Source'],
+ 'email_source_url':['Email Source','Email Source URL','Exact Email Source URL','Contact Source','Primary Research Source','Primary Source URL','Source URL'],
  'country':['Country','Country Verified','Country / Market'],
  'genre':['Genre','Genre / Category'],
- 'subject':['Selected Subject','Subject','Subject Line','Subject Option 1'],
- 'body':['First Outreach Message','Best First Message — Author Language','First Outreach Message (Icelandic)','First Message (Author Language)','Personalized Message (Author Language)','First Message (Icelandic)','Icelandic Message','Agent-Style First Message','Full First Message','Personalized First Message','First Message','Message','Body','Email Body'],
- 'body_english':['Best First Message — English','English Version','First Outreach Message (English)','First Message (English)','Personalized First Message (English)','English Message'],
+ 'subject':['Selected Subject','Subject','Subject Line','Subject Option 1','Final Subject'],
+ 'body':['First Outreach Message','Best First Message — Author Language','First Outreach Message (Icelandic)','First Message (Author Language)','Personalized Message (Author Language)','First Message (Icelandic)','Icelandic Message','Agent-Style First Message','Full First Message','Personalized First Message','First Message','Message','Body','Email Body','Author-language Message','Author Language Message','Primary Message'],
+ 'body_english':['Best First Message — English','English Version','First Outreach Message (English)','First Message (English)','Personalized First Message (English)','English Message','English Review','English Review Message','English Translation'],
  'bio':['Short Bio','Research Summary','Verified Research Summary','Bio','Biography','Researched Bio'],
  'books':['Key Works','Books','Main Books','Key Work Referenced','Book/Work Referenced','Books / Works'],
  'recent_activity':['Recent Activity / Current Moment','Recent Activity','Current Moment','2026 Activity Evidence'],
- 'status':['Outreach Stage','Outreach Status','Processing Status','Research Status','Status'],
+ 'status':['Outreach Stage','Outreach Status','Processing Status','Research Status','Status','Readiness / Hold'],
  'reply_notes':['Reply / Conversation Notes','Conversation Notes','Research Notes'],
 }
 
@@ -70,9 +70,10 @@ def parse_upload(data, filename):
    elif not item['subject'] or not item['body']: reason='Missing subject or first message'
    elif '\n' in item['subject'] or '\r' in item['subject']: reason='Subject must be a single line'
    elif len(item['subject'])>400 or any(len(item[k])>30000 for k in ('body','body_english','bio','books','reply_notes')):reason='Text exceeds field limit'
-   elif any(norm(item['status']).startswith(x) for x in ('sent','replied','on hold','hold','do not contact','unsubscribed','deprioritized','deprioritised')): reason='Excluded by outreach status: '+item['status']
-   elif item['email'] in seen: reason='Duplicate email in this workbook'
+   elif any(norm(item['status']).startswith(x) for x in ('sent','replied','on hold','hold','do not contact','unsubscribed','deprioritized','deprioritised')) or 'duplicate hold' in norm(item['status']): reason='Excluded by outreach status: '+item['status']
+   identity=norm(item['name'])+'|'+norm(item['country'])
+   if not reason and identity in seen: reason='Duplicate author in this workbook'
    if reason: issues.append({'row':number,'name':item['name'],'reason':reason});continue
-   seen.add(item['email']);rows.append(item)
+   seen.add(identity);rows.append(item)
   return {'sheet':title,'rows':rows,'issues':issues,'columns':{k:str(table[header_row][i]) for k,i in columns.items() if i is not None}}
- raise ValueError('No author sheet found. Include Author, Email, Subject and First Message (or First Outreach Message (English)) columns.')
+ raise ValueError('No author message sheet found. Letterdesk needs Author, Email (including Recorded Email), Subject, and a message column such as First Message, Author-language Message, or English Review.')
