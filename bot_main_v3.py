@@ -2598,7 +2598,7 @@ async def web_import_chatgpt_results(request: legacy.Request, file: UploadFile=F
 async def web_update_message(request: legacy.Request,message_id:int):
     ctx=_web_auth(request);team=_auth_team(ctx);uid=_web_actor_uid(ctx,team)
     m=_web_message(message_id,uid)
-    if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
+    if not m or m.get("status")=="deleted":raise legacy.HTTPException(status_code=404,detail="Message not found")
     if len(await request.body())>200000:raise legacy.HTTPException(status_code=413,detail="Draft too large")
     data=await request.json()
     fields={k:str(data.get(k) or '') for k in ['recipient','subject','body','body_english','reply_notes']}
@@ -2612,6 +2612,29 @@ async def web_update_message(request: legacy.Request,message_id:int):
         legacy.execq("""UPDATE messages SET recipient_email=:r,subject=:s,body=:b,body_english=:be,reply_notes=:n,updated_at=:d
             WHERE id=:i AND status NOT IN ('sent','sending','sending_web') AND COALESCE(reply_status,'')<>'replied'""",r=fields['recipient'],s=fields['subject'],b=fields['body'],be=fields['body_english'],n=fields['reply_notes'],d=legacy.iso(),i=message_id)
     return {"ok":True,"message":_web_message(message_id,uid)}
+
+
+@app.post("/api/v1/messages/delete-list")
+async def web_delete_messages(request: legacy.Request):
+    ctx=_web_auth(request);team=_auth_team(ctx);uid=_web_actor_uid(ctx,team)
+    if len(await request.body())>10000:
+        raise legacy.HTTPException(status_code=413,detail="List too large")
+    data=await request.json()
+    ids=data.get("message_ids") if isinstance(data,dict) else None
+    if not isinstance(ids,list) or not 1<=len(ids)<=100 or any(type(i) is not int or i<=0 for i in ids):
+        raise legacy.HTTPException(status_code=400,detail="Select between 1 and 100 messages")
+    ids=list(dict.fromkeys(ids))
+    params={"u":uid,"d":legacy.iso(),**{f"m{k}":i for k,i in enumerate(ids)}}
+    placeholders=",".join(f":m{k}" for k in range(len(ids)))
+    with legacy.engine.begin() as c:
+        records=c.execute(text(f"""SELECT m.id,m.status FROM messages m JOIN prospects p ON p.id=m.prospect_id
+            WHERE m.id IN ({placeholders}) AND p.claimed_by_user_id=:u FOR UPDATE OF m"""),params).mappings().all()
+        if len(records)!=len(ids):
+            raise legacy.HTTPException(status_code=404,detail="One or more messages were not found in your workspace")
+        if any(m["status"] in {"sending","sending_web"} for m in records):
+            raise legacy.HTTPException(status_code=409,detail="Wait for the current email to finish before deleting")
+        c.execute(text(f"UPDATE messages SET status='deleted',updated_at=:d WHERE id IN ({placeholders})"),params)
+    return {"ok":True,"deleted_ids":ids}
 
 
 @app.get("/api/v1/messages")
@@ -2642,7 +2665,7 @@ async def web_messages(request: legacy.Request, status: str="ready", limit: int=
         p.genre AS author_genre,p.website AS author_website,p.bio AS author_bio,p.books AS author_books,p.email_source_url,
         COALESCE(NULLIF(m.recipient_email,''),p.email) AS recipient
         FROM messages m JOIN prospects p ON p.id=m.prospect_id
-        WHERE p.claimed_by_user_id=:u AND {condition}{search_sql}
+        WHERE p.claimed_by_user_id=:u AND m.status<>'deleted' AND {condition}{search_sql}
         ORDER BY CASE WHEN m.status='ready' THEN 0 ELSE 1 END,m.id DESC LIMIT :n OFFSET :offset""",**params)
     accounts=legacy.rows("SELECT id,email FROM gmail_accounts WHERE telegram_user_id=:u ORDER BY id",u=uid) if uid else []
     return {"ok":True,"status":status,"messages":rs,
@@ -2653,7 +2676,7 @@ async def web_message_compose_link(request: legacy.Request, message_id: int):
     ctx=_web_auth(request);team=_auth_team(ctx)
     uid=_web_actor_uid(ctx,team)
     m=_web_message(message_id,uid)
-    if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
+    if not m or m.get("status")=="deleted":raise legacy.HTTPException(status_code=404,detail="Message not found")
     recipient=(m.get("recipient") or "").strip()
     if not recipient:
         raise legacy.HTTPException(status_code=400,detail="This message has no recipient email")
@@ -2673,7 +2696,7 @@ async def web_message_status(request: legacy.Request, message_id: int):
     body=await request.json()
     action=str(body.get("status") or "").strip().lower()
     t=legacy.iso()
-    if action=="sent" and m.get("status")=="sent":
+    if m.get("status")=="deleted" or (action=="sent" and m.get("status")=="sent"):
         return {"ok":True,"message":m}
     if action=="sent":
         legacy.execq("""UPDATE messages SET status='sent',sent_by_user_id=:u,sent_at=:d,
@@ -2898,7 +2921,7 @@ async def web_message_send(request: legacy.Request, message_id: int):
     ctx=_web_auth(request);team=_auth_team(ctx);tid=int(team["id"])
     uid=_web_actor_uid(ctx,team)
     m=_web_message(message_id,uid)
-    if not m:raise legacy.HTTPException(status_code=404,detail="Message not found")
+    if not m or m.get("status")=="deleted":raise legacy.HTTPException(status_code=404,detail="Message not found")
     if (m.get("status") or "")=="sent":
         raise legacy.HTTPException(status_code=409,detail="This message is already marked sent")
     body=await request.json()
