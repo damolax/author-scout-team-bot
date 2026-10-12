@@ -2673,6 +2673,8 @@ async def web_message_status(request: legacy.Request, message_id: int):
     body=await request.json()
     action=str(body.get("status") or "").strip().lower()
     t=legacy.iso()
+    if action=="sent" and m.get("status")=="sent":
+        return {"ok":True,"message":m}
     if action=="sent":
         legacy.execq("""UPDATE messages SET status='sent',sent_by_user_id=:u,sent_at=:d,
             updated_at=:d,sent_via=CASE WHEN COALESCE(sent_via,'')='' THEN 'manual_web' ELSE sent_via END

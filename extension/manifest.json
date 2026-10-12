@@ -1,14 +1,40 @@
 {
   "manifest_version": 3,
-  "name": "Letterdesk Gmail Drafts",
-  "version": "1.0.0",
-  "description": "Fill a reviewed Letterdesk message in an existing Gmail tab. You click Send yourself.",
-  "permissions": ["storage"],
-  "host_permissions": ["https://mail.google.com/*"],
-  "background": {"service_worker": "worker.js", "type": "module"},
-  "action": {"default_title": "Letterdesk", "default_popup": "popup.html"},
+  "name": "Letterdesk Gmail Sender",
+  "version": "2.0.0",
+  "description": "Open Gmail drafts or send an explicit queue with random per-account delays.",
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*"
+  ],
+  "background": {
+    "service_worker": "worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Letterdesk",
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
-    {"matches": ["https://author-scout-team-bot.vercel.app/*"], "js": ["bridge.js"]},
-    {"matches": ["https://mail.google.com/*"], "js": ["gmail.js"], "run_at": "document_idle"}
+    {
+      "matches": [
+        "https://author-scout-team-bot.vercel.app/*"
+      ],
+      "js": [
+        "bridge.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "gmail.js"
+      ],
+      "run_at": "document_idle"
+    }
   ]
 }

@@ -14,9 +14,10 @@
     return found.size===1?[...found][0]:null;
   }
   const pause=ms=>new Promise(r=>setTimeout(r,ms));
-  async function waitFor(fn){for(let i=0;i<40;i++){const result=fn();if(result)return result;await pause(150);}throw Error('Gmail layout was not recognized. No message was sent. Use the copy buttons instead.');}
+  async function waitFor(fn){for(let i=0;i<40;i++){const result=fn();if(result)return result;await pause(150);}throw Error('Gmail layout was not recognized. Gmail could not confirm this step. Check the draft and Sent folder before retrying.');}
   function setInput(el,value){const setter=Object.getOwnPropertyDescriptor(el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}
-  async function fill(d){
+  async function fill(d,sendNow=false){
+    let attempted=false;
     if(working)throw Error('Finish the current draft first.');
     if(account()!==d.account)throw Error('The Gmail account could not be confirmed. Nothing was filled.');
     working=true;
@@ -37,13 +38,27 @@
       subject.focus();setInput(subject,d.subject);
       body.focus();const message=document.createElement('div');message.style.whiteSpace='pre-wrap';message.textContent=d.body;body.prepend(message,document.createElement('br'));body.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:d.body}));
       if(subject.value!==d.subject||message.textContent!==d.body||!body.contains(message))throw Error('Gmail did not retain the full draft. Check it manually before sending.');
-      const note=document.createElement('div');note.textContent='Letterdesk draft ready. Check the From address, recipient and full message, then click Send yourself.';note.style.cssText='padding:12px;background:#e5f1eb;color:#173e30;font:14px system-ui;border:1px solid #abc9b8;';note.setAttribute('role','status');dialog.prepend(note);
-      return {ok:true};
-    }finally{working=false;}
+      if(!sendNow)return {ok:true};
+      // Automatic sending is restricted to an explicitly verified From identity.
+      const from=dialog.querySelector('[name="from"]');
+      const fromText=from?.value||from?.getAttribute('email')||'';
+      const fromEmails=fromText.match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)||[];
+      if(fromEmails.length!==1||fromEmails[0].toLowerCase()!==d.account)throw Error('The From address cannot be verified or differs from the selected Gmail account. Draft saved; queue paused.');
+      await pause(300);
+      const recipientValues=[...dialog.querySelectorAll('[email],[data-hovercard-id]')].map(e=>e.getAttribute('email')||e.getAttribute('data-hovercard-id'));
+      if(!recipientValues.some(v=>v?.toLowerCase()===d.to.toLowerCase()))throw Error('Gmail has not confirmed the recipient. Draft saved; queue paused.');
+      const send=[...dialog.querySelectorAll('[role="button"]')].find(e=>visible(e)&&/^Send(?:\s|$|\()/i.test(e.getAttribute('data-tooltip')||e.getAttribute('aria-label')||e.textContent.trim())&&!/schedule/i.test(e.getAttribute('aria-label')||''));
+      if(!send||send.getAttribute('aria-disabled')==='true')throw Error('Gmail Send button is unavailable. Draft saved; queue paused.');
+      if(account()!==d.account||subject.value!==d.subject||message.textContent!==d.body)throw Error('Account or draft changed. Sending stopped.');
+      attempted=true;send.click();
+      await waitFor(()=>!subject.isConnected&&[...document.querySelectorAll('[role="alert"],.bAq')].some(e=>visible(e)&&/message sent/i.test(e.textContent)));
+      return {ok:true,sent:true};
+    }catch(error){return {ok:false,error:error.message,attempted};}
+    finally{working=false;}
   }
   chrome.runtime.onMessage.addListener((m,sender,reply)=>{
     if(sender.id!==chrome.runtime.id)return;
     if(m.type==='LD_ACCOUNT'){reply({email:account()});return;}
-    if(m.type==='LD_FILL'){fill(m.draft).then(reply).catch(e=>reply({ok:false,error:e.message}));return true;}
+    if(m.type==='LD_FILL'||m.type==='LD_SEND'){fill(m.draft,m.type==='LD_SEND').then(reply).catch(e=>reply({ok:false,error:e.message}));return true;}
   });
 })();

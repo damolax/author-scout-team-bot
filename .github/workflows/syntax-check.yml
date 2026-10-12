@@ -48,6 +48,9 @@ jobs:
       - name: Install web dependencies
         run: npm install
       - name: Check extension account routing
-        run: node --test ../tests/test_extension.mjs ../tests/test_extension_worker.mjs
+        run: |
+          node --check ../extension/gmail.js
+          node --check ../extension/worker.js
+          node --test ../tests/test_extension.mjs ../tests/test_extension_worker.mjs
       - name: Build Vite dashboard
         run: npm run build

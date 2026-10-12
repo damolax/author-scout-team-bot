@@ -1,21 +1,22 @@
-LETTERDESK GMAIL DRAFTS 1.0.0
+LETTERDESK GMAIL SENDER 2.0
 
-PC CHROME INSTALLATION
-1. Extract this ZIP to a folder you will keep.
-2. Open chrome://extensions in Chrome.
-3. Enable Developer mode, click Load unpacked, and select this folder (the one containing manifest.json).
-4. Refresh Letterdesk and each Gmail tab once.
-5. In Letterdesk, choose an author, review the draft and click Refresh Gmail accounts.
-6. Choose the account and click Fill Gmail draft. Check From, To, subject and body, then click Send yourself.
-7. Return to Letterdesk and click I sent this email. Opening a draft never marks it sent.
+BROWSER: Click Open Gmail in Letterdesk. The recipient, subject and message are filled. Click Send in Gmail. No copying or review checkbox.
 
-The extension reuses an already-open, signed-in Gmail tab. It does not collect passwords, access Gmail APIs or send mail automatically. Gmail layout changes, language differences or account-detection failures may require manual copy. It stops rather than guessing an account or replacing an existing compose window. Close or save existing drafts first. Signatures in a newly created draft are preserved below the message.
+PC EXTENSION INSTALL / UPDATE
+1. Extract the downloaded ZIP into a permanent folder.
+2. Open chrome://extensions, turn on Developer mode, then Load unpacked and select that folder.
+3. If version 1 is already installed, remove it first so two copies cannot run.
+4. Refresh Letterdesk and every Gmail tab once. Use the normal English Gmail interface.
+5. Click Connect extension in Letterdesk. Your open Gmail accounts appear.
 
-PHONE
-Open Letterdesk in Chrome, then menu > Add to Home screen. Review a saved draft and tap Open email app. Choose Gmail if asked. Check the From account and click Send yourself. The phone controls cannot force a Gmail sender. If text is missing, use the separate Copy recipient / subject / message buttons. This is a mobile website, not an Android extension or APK.
+ONE MESSAGE: Open the author, select the Gmail account and click Send with extension. Changes are saved automatically. The extension opens Compose in the existing Gmail tab, fills it, checks the account and recipient, clicks Send, and waits for Gmail's Message sent confirmation.
 
-PRIVACY
-Permissions cover Gmail and the Author Scout website only. Draft content crosses locally from Letterdesk to the selected Gmail tab. No extension telemetry or extra server is used. Only request identifiers are temporarily stored in browser session storage to block repeated requests. Your existing Letterdesk server continues to store your saved drafts as before.
+RANDOM QUEUE: Choose Gmail accounts at the top of Letterdesk. Set the minimum and maximum seconds between uses of the same account. Choose the number of messages from the displayed page, then Start sending. Primary or English version can be selected. Use Pause/Resume in Letterdesk or the extension popup. Inspect Gmail before skipping any problem message. Clearing a queue skips remaining jobs without deleting previous send receipts.
 
-LIMITATIONS
-No scheduled/automatic sending, no remote PC queue, no offline sending, no promise of delivery. Gmail's From aliases must already be configured; domain forwarding alone is not a sending service. The extension does not bypass Gmail limits. Never assume a draft was sent until you send it in Gmail.
+The extension chooses randomly among eligible accounts. Each sent message starts a random cooldown for that sender. Chrome timers can run late; exact second-by-second timing is not guaranteed. Keep the PC awake with Chrome and Gmail open. Letterdesk can be closed while the queue runs; reopen it to sync sent statuses. Chrome restart/extension update pauses the queue. It does not run on phone or while the PC is off.
+
+A message with any prior send attempt is never automatically retried, even after errors. If confirmation is missing, check Gmail Sent and manually mark it in Letterdesk. Missing From identity, an unexpected alias, an existing compose window, a recipient not committed by Gmail, or an unrecognized layout pauses sending. Save/close existing Gmail drafts before starting. Gmail interface changes may require an extension update. Provider limits still apply.
+
+PHONE: Open Letterdesk in Chrome. Click Open Gmail, then Send. You may add Letterdesk to the home screen. The PC queue cannot be started or controlled through this phone browser. The extension runs only on the PC.
+
+PRIVACY: Only Author Scout and Gmail are accessed. Queued draft text is stored locally in this Chrome profile, never on an extra service. Clear waiting queue removes the need to send remaining jobs; removing the extension deletes its local data. Send receipts store message IDs, account, time and status. No Gmail password, login cookie, or Letterdesk session key is collected by the extension. Drafts already saved in Letterdesk remain on its server. No Google Cloud setup or paid sending provider is required for your existing Gmail accounts. A domain forwarding address is not automatically a Gmail sending identity.
