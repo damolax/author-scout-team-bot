@@ -30,7 +30,7 @@ async function tick(){
   current.status='sending';current.account=email;current.startedAt=Date.now();q.error='';await write(q);
   ledger[ledgerKey]={scope:q.scope,messageId:job.messageId,account:email,status:'sending'};await chrome.storage.local.set({[LEDGER]:ledger});
   let result;
-  try{await chrome.tabs.update(match.tabId,{active:true});await chrome.windows.update(match.windowId,{focused:true});if((await removedAccounts()).includes(email))result={ok:false,attempted:false,error:'Sender removed before sending.'};else result=await chrome.tabs.sendMessage(match.tabId,{type:'LD_SEND',draft:{...job,id:String(job.messageId),account:email}})}catch{result={ok:false,error:'Gmail disconnected during sending. Check Sent before continuing.'};}
+  try{await chrome.tabs.update(match.tabId,{active:true});await chrome.windows.update(match.windowId,{focused:true});if((await removedAccounts()).includes(email))result={ok:false,attempted:false,error:'Sender removed before sending.'};else result=await chrome.tabs.sendMessage(match.tabId,{type:'LD_SEND',draft:{...job,id:String(job.messageId),account:email,fromEmail:q.fromEmails?.[email]||email}})}catch{result={ok:false,error:'Gmail disconnected during sending. Check Sent before continuing.'};}
   const latest=await read();if(!latest||latest.id!==q.id)return;
   const updated=latest.jobs.find(j=>j.messageId===job.messageId),finished=Date.now();
   updated.status=result?.ok&&result.sent?'sent':result?.attempted===false?'failed':'uncertain';updated.error=result?.error||'';updated.finishedAt=finished;

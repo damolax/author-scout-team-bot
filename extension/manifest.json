@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Letterdesk Gmail Sender",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Open Gmail drafts or send an explicit queue with random per-account delays.",
   "permissions": [
     "storage",

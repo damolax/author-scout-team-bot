@@ -13,6 +13,17 @@
     }
     return found.size===1?[...found][0]:null;
   }
+  function fromAddress(dialog){
+    // Read compose sender controls only, never recipients, signatures or message text.
+    const fields=[...dialog.querySelectorAll('[name="from"]')];
+    const controls=fields.length?fields:[...dialog.querySelectorAll('.az2 [email],.az2 [data-hovercard-id],.az2 .J-JN-M-I-Jm,[data-name="from"]')].filter(visible);
+    const found=new Set();
+    for(const e of controls){
+      const value=e.tagName==='SELECT'?e.selectedOptions[0]?.value:(e.value||e.getAttribute('email')||e.getAttribute('data-hovercard-id')||e.textContent);
+      for(const email of String(value||'').match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)||[])found.add(email.toLowerCase());
+    }
+    return found.size===1?[...found][0]:null;
+  }
   const pause=ms=>new Promise(r=>setTimeout(r,ms));
   async function waitFor(fn){for(let i=0;i<40;i++){const result=fn();if(result)return result;await pause(150);}throw Error('Gmail layout was not recognized. Gmail could not confirm this step. Check the draft and Sent folder before retrying.');}
   function setInput(el,value){const setter=Object.getOwnPropertyDescriptor(el instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;setter.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}
@@ -39,20 +50,19 @@
       body.focus();const message=document.createElement('div');message.style.whiteSpace='pre-wrap';message.textContent=d.body;body.prepend(message,document.createElement('br'));body.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:d.body}));
       if(subject.value!==d.subject||message.textContent!==d.body||!body.contains(message))throw Error('Gmail did not retain the full draft. Check it manually before sending.');
       if(!sendNow)return {ok:true};
-      // Automatic sending is restricted to an explicitly verified From identity.
-      const from=dialog.querySelector('[name="from"]');
-      const fromText=from?.value||from?.getAttribute('email')||'';
-      const fromEmails=fromText.match(/[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)||[];
-      if(fromEmails.length!==1||fromEmails[0].toLowerCase()!==d.account)throw Error('The From address cannot be verified or differs from the selected Gmail account. Draft saved; queue paused.');
+      const expectedFrom=(d.fromEmail||d.account).trim().toLowerCase();
+      const actualFrom=fromAddress(dialog);
+      if(!actualFrom)throw Error('Gmail From address could not be read. Expand the From field in Gmail and check the saved draft. Nothing was sent.');
+      if(actualFrom!==expectedFrom)throw Error(`Gmail is set to send as ${actualFrom}, but Letterdesk expects ${expectedFrom}. Set that Send as address as the default in this Gmail account, or correct it in Letterdesk. Draft saved; nothing was sent.`);
       await pause(300);
       const recipientValues=[...dialog.querySelectorAll('[email],[data-hovercard-id]')].map(e=>e.getAttribute('email')||e.getAttribute('data-hovercard-id'));
       if(!recipientValues.some(v=>v?.toLowerCase()===d.to.toLowerCase()))throw Error('Gmail has not confirmed the recipient. Draft saved; queue paused.');
       const send=[...dialog.querySelectorAll('[role="button"]')].find(e=>visible(e)&&/^Send(?:\s|$|\()/i.test(e.getAttribute('data-tooltip')||e.getAttribute('aria-label')||e.textContent.trim())&&!/schedule/i.test(e.getAttribute('aria-label')||''));
       if(!send||send.getAttribute('aria-disabled')==='true')throw Error('Gmail Send button is unavailable. Draft saved; queue paused.');
-      if(account()!==d.account||subject.value!==d.subject||message.textContent!==d.body)throw Error('Account or draft changed. Sending stopped.');
+      if(fromAddress(dialog)!==expectedFrom||account()!==d.account||subject.value!==d.subject||message.textContent!==d.body)throw Error('Account or draft changed. Sending stopped.');
       attempted=true;send.click();
       await waitFor(()=>!subject.isConnected&&[...document.querySelectorAll('[role="alert"],.bAq')].some(e=>visible(e)&&/message sent/i.test(e.textContent)));
-      return {ok:true,sent:true};
+      return {ok:true,sent:true,fromEmail:expectedFrom};
     }catch(error){return {ok:false,error:error.message,attempted};}
     finally{working=false;}
   }

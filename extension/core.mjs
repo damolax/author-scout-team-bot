@@ -20,7 +20,9 @@ export function validateQueue(input) {
   if(!Array.isArray(input.messages)||!input.messages.length||input.messages.length>100)throw Error('Choose 1 to 100 messages per queue.');
   const ids=new Set();
   const jobs=input.messages.map(m=>{if(!Number.isSafeInteger(m.messageId)||m.messageId<1||ids.has(m.messageId))throw Error('Duplicate or invalid message ID.');ids.add(m.messageId);const d=validateDraft({...m,id:String(m.messageId),account:accounts[0]});return {messageId:m.messageId,to:d.to,subject:d.subject,body:d.body,status:'pending'};});
-  return {accounts,minSeconds:min,maxSeconds:max,scope:input.scope,jobs};
+  const fromEmails={};
+  for(const account of accounts){const from=String(input.fromEmails?.[account]||account).trim().toLowerCase();if(!emailOK(from))throw Error('Enter a valid Send as address for '+account);fromEmails[account]=from;}
+  return {accounts,fromEmails,minSeconds:min,maxSeconds:max,scope:input.scope,jobs};
 }
 export function nextEligible(accounts,cooldowns,now){return accounts.filter(a=>(cooldowns[a]||0)<=now)}
 export function randomDelay(min,max,random=Math.random){return (min+Math.floor(random()*(max-min+1)))*1000}
