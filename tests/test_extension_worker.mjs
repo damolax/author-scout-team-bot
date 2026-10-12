@@ -16,3 +16,15 @@ test('rejects untrusted page',async()=>{assert.equal((await call({type:'LD_ACCOU
 test('explicit queue sends and records only confirmed success',async()=>{assert.equal((await call({type:'LD_QUEUE_START',queue})).ok,true);await timers.pop()();const s=await call({type:'LD_QUEUE_STATUS',scope});assert.equal(s.queue.state,'complete');assert.equal(s.receipts.length,1);assert.equal(sends.length,1);assert.equal(sends[0].id,2);assert.ok(s.queue.cooldowns['two@example.com']>=s.receipts[0].finishedAt+60000);assert.ok(s.queue.cooldowns['two@example.com']<=s.receipts[0].finishedAt+90000);assert.equal((await call({type:'LD_QUEUE_START',queue})).ok,false)});
 test('missing send confirmation pauses and never retries',async()=>{sendResult={ok:false,error:'Confirmation missing'};const q={...queue,accounts:['one@example.com'],messages:[{...queue.messages[0],messageId:2}]};assert.equal((await call({type:'LD_QUEUE_START',queue:q})).ok,true);await timers.pop()();const s=await call({type:'LD_QUEUE_STATUS',scope});assert.equal(s.queue.state,'paused');assert.equal(s.queue.jobs[0].status,'uncertain');assert.equal(s.receipts.length,1);assert.equal((await call({type:'LD_QUEUE_RESUME',scope})).ok,false);assert.equal(sends.length,2)});
 test('skip and clear do not erase duplicate protection',async()=>{assert.equal((await call({type:'LD_QUEUE_SKIP',scope})).ok,true);await call({type:'LD_QUEUE_CLEAR',scope});assert.equal((await call({type:'LD_QUEUE_START',queue:{...queue,messages:[{...queue.messages[0],messageId:2}]}})).ok,false)});
+test('removed accounts stay excluded and cannot be selected for sending',async()=>{
+ const removed=await call({type:'LD_ACCOUNT_REMOVE',email:'TWO@example.com'});assert.equal(removed.ok,true);assert.deepEqual(removed.removed,['two@example.com']);assert.equal(removed.accounts.some(a=>a.email==='two@example.com'),false);
+ const refreshed=await call({type:'LD_ACCOUNTS'});assert.equal(refreshed.accounts.some(a=>a.email==='two@example.com'),false);
+ assert.equal((await call({type:'LD_PREPARE',draft:{...draft,id:'removed-attempt'}})).ok,false);
+ assert.equal((await call({type:'LD_QUEUE_START',queue:{...queue,messages:[{...queue.messages[0],messageId:3}]}})).ok,false);
+ const restored=await call({type:'LD_ACCOUNT_RESTORE',email:'two@example.com'});assert.equal(restored.accounts.some(a=>a.email==='two@example.com'),true);assert.deepEqual(restored.removed,[]);
+});
+test('removing a queued sender pauses the queue and prevents resume without senders',async()=>{
+ const q={...queue,messages:[{...queue.messages[0],messageId:4}]};assert.equal((await call({type:'LD_QUEUE_START',queue:q})).ok,true);
+ await call({type:'LD_ACCOUNT_REMOVE',email:'two@example.com'});const status=await call({type:'LD_QUEUE_STATUS',scope});assert.equal(status.queue.state,'paused');assert.equal((await call({type:'LD_QUEUE_RESUME',scope})).ok,false);
+ await timers.pop()();assert.equal(sends.length,2);
+});

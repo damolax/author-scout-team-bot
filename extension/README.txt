@@ -1,4 +1,4 @@
-LETTERDESK GMAIL SENDER 2.0
+LETTERDESK GMAIL SENDER 2.1
 
 BROWSER: Click Open Gmail in Letterdesk. The recipient, subject and message are filled. Click Send in Gmail. No copying or review checkbox.
 
@@ -20,3 +20,7 @@ A message with any prior send attempt is never automatically retried, even after
 PHONE: Open Letterdesk in Chrome. Click Open Gmail, then Send. You may add Letterdesk to the home screen. The PC queue cannot be started or controlled through this phone browser. The extension runs only on the PC.
 
 PRIVACY: Only Author Scout and Gmail are accessed. Queued draft text is stored locally in this Chrome profile, never on an extra service. Clear waiting queue removes the need to send remaining jobs; removing the extension deletes its local data. Send receipts store message IDs, account, time and status. No Gmail password, login cookie, or Letterdesk session key is collected by the extension. Drafts already saved in Letterdesk remain on its server. No Google Cloud setup or paid sending provider is required for your existing Gmail accounts. A domain forwarding address is not automatically a Gmail sending identity.
+
+REMOVE ACCOUNTS: Click Remove beside an account in Letterdesk or the extension popup. It stays excluded even if its Gmail tab remains open or Chrome restarts. Add back restores it. Removing a sender pauses a running queue that uses it; an email already being sent cannot be recalled. Resume uses remaining accounts. Removal does not sign you out of Gmail.
+
+UPDATE FROM VERSION 2: Extract this ZIP over the files in your existing extension folder, then click Reload on its card at chrome://extensions. Refresh Gmail and Letterdesk. Keeping the same extension preserves exclusions and send receipts.
