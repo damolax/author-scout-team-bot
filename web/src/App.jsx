@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState, useRef } from 'react'
 import { authClient, sessionTokenFrom } from './auth.js'
 import Letterdesk from './Letterdesk.jsx'
 
@@ -13,7 +13,7 @@ async function request(path, key, options = {}) {
     const res = await fetch(API_BASE + path, { ...options, headers, signal: controller.signal })
     let body = {}
     try { body = await res.json() } catch { body = {} }
-    if (!res.ok) throw new Error(body.detail || body.error || 'Request failed')
+    if (!res.ok) { const error=new Error(body.detail || body.error || 'Request failed'); error.status=res.status; throw error }
     return body
   } catch (e) {
     if (e?.name === 'AbortError') {
@@ -142,9 +142,10 @@ function Empty({ title, body }) {
   )
 }
 
-function Login({ onGoogle, onEmail, onForgot, busy, error, status }) {
+function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
   const [mode, setMode] = useState('signin')
   const [forgotSent, setForgotSent] = useState(false)
+  const [showPassword,setShowPassword]=useState(false)
   const [form, setForm] = useState({ name:'', email:'', password:'' })
   const setField = (k,v) => setForm(prev => ({...prev,[k]:v}))
   const signup = mode === 'signup'
@@ -183,6 +184,7 @@ function Login({ onGoogle, onEmail, onForgot, busy, error, status }) {
               <input type="email" value={form.email} onChange={e => setField('email',e.target.value)}
                 placeholder="you@example.com" autoComplete="email" required />
             </div>
+            {onRetry&&<button type="button" className="button button-block" disabled={busy} onClick={onRetry}>Retry saved login</button>}
             <button className="button button-auth-email button-block" disabled={busy}>
               {busy ? (status || 'Sending reset link…') : 'Send reset link'}
             </button>
@@ -220,10 +222,11 @@ function Login({ onGoogle, onEmail, onForgot, busy, error, status }) {
                 <label>Password</label>
                 {!signup && <button type="button" className="forgot-link" onClick={() => setMode('forgot')}>Forgot password?</button>}
               </div>
-              <input type="password" value={form.password} onChange={e => setField('password',e.target.value)}
+              <div className="password-toggle-field"><input type={showPassword?'text':'password'} value={form.password} onChange={e => setField('password',e.target.value)}
                 placeholder={signup ? 'Create a secure password' : 'Your password'}
-                autoComplete={signup ? 'new-password' : 'current-password'} minLength="8" required />
+                autoComplete={signup ? 'new-password' : 'current-password'} minLength="8" required /><button type="button" aria-label={showPassword?'Hide password':'Show password'} aria-pressed={showPassword} onClick={()=>setShowPassword(v=>!v)}>{showPassword?'Hide':'Show'}</button></div>
             </div>
+            {onRetry&&<button type="button" className="button button-block" disabled={busy} onClick={onRetry}>Retry saved login</button>}
             <button className="button button-auth-email button-block" disabled={busy}>
               {busy ? (status || 'Please wait…') : (signup ? 'Create account' : 'Sign in')}
             </button>
@@ -1159,14 +1162,16 @@ const NAV = [
 ]
 
 function AppCore() {
+  const authEpoch=useRef(0)
   const [keyValue, setKeyValue] = useState(() => localStorage.getItem('authorScoutSession') || '')
-  const [session, setSession] = useState(null)
+  const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(location.pathname==='/reset-password'||params.has('token')||params.has('error')||params.get('signin')==='1'||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
   const [loginStatus, setLoginStatus] = useState('')
   const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') === 'messages' ? 'messages' : 'dashboard')
 
   const verify = useCallback(async (rawKey) => {
+    const epoch=authEpoch.current
     const key=String(rawKey || '').replace(/\s+/g,'').trim()
     if (!key) {
       setLoginError('Paste a valid Author Scout access key.')
@@ -1175,19 +1180,26 @@ function AppCore() {
     setChecking(true); setLoginError(''); setLoginStatus('Opening your workspace…')
     try {
       const s = await request('/api/v1/session', key)
+      if(epoch!==authEpoch.current)return true
       localStorage.setItem('authorScoutSession', key)
       setKeyValue(key)
       setSession(s)
+      localStorage.setItem('authorScoutSessionInfo',JSON.stringify({key,session:s}))
       setLoginStatus('')
+      return true
     } catch(e) {
-      localStorage.removeItem('authorScoutSession')
-      setKeyValue('')
-      setSession(null)
-      setLoginError(e?.message || 'That access key could not be verified.')
+      if(epoch!==authEpoch.current)return true
+      if(e?.status===401||e?.status===403){
+        localStorage.removeItem('authorScoutSession');localStorage.removeItem('authorScoutSessionInfo')
+        setKeyValue('');setSession(null)
+      }
+      setLoginError(e?.message || 'Could not connect. Your login is still saved; please retry.')
       setLoginStatus('')
+      return e?.status!==401&&e?.status!==403
     } finally { setChecking(false) }
   }, [])
   const exchangeManagedAuth = useCallback(async (authResult = null) => {
+    const epoch=authEpoch.current
     setChecking(true)
     setLoginError('')
     setLoginStatus('Opening your workspace…')
@@ -1205,10 +1217,13 @@ function AppCore() {
         method:'POST',
         body:JSON.stringify({ session_token: token })
       })
+      if(epoch!==authEpoch.current)return null
       localStorage.setItem('authorScoutSession',d.session)
       setKeyValue(d.session)
       const s=await request('/api/v1/session',d.session)
+      if(epoch!==authEpoch.current)return null
       setSession(s)
+      localStorage.setItem('authorScoutSessionInfo',JSON.stringify({key:d.session,session:s}))
       setLoginStatus('')
       return s
     } catch(e) {
@@ -1246,6 +1261,7 @@ function AppCore() {
     try {
       // Clear only the old Author Scout app session. Better Auth will establish the new Google identity.
       localStorage.removeItem('authorScoutSession')
+    localStorage.removeItem('authorScoutSessionInfo')
       setKeyValue('')
       const result=await authClient.signIn.social({
         provider:'google',
@@ -1286,12 +1302,14 @@ function AppCore() {
 
   useEffect(() => {
     let cancelled=false
+    const epoch=authEpoch.current
     const boot=async () => {
       const params=new URLSearchParams(window.location.search)
       // Recovery pages must not race automatic restoration of an old session.
       if (window.location.pathname === '/reset-password' || params.has('token') || params.has('error') || params.get('signin') === '1') {
         if (params.get('signin') === '1') {
           localStorage.removeItem('authorScoutSession')
+    localStorage.removeItem('authorScoutSessionInfo')
           setKeyValue('')
         }
         setChecking(false)
@@ -1308,17 +1326,21 @@ function AppCore() {
       }
       if (authError) {
         localStorage.removeItem('authorScoutSession')
+    localStorage.removeItem('authorScoutSessionInfo')
         setKeyValue('')
         setLoginError('Google sign-in was cancelled or could not be completed.')
         window.history.replaceState({},document.title,window.location.pathname)
         return
       }
 
+      const saved=localStorage.getItem('authorScoutSession') || ''
+      if(!cancelled&&saved&&await verify(saved))return
+
       // Email/password login may leave a valid managed Neon Auth session.
       // Prefer that fresh identity before any stale Author Scout local session.
       try {
         const current=await authClient.getSession()
-        if (!cancelled && !current?.error && sessionTokenFrom(current)) {
+        if (!cancelled && epoch===authEpoch.current && !current?.error && sessionTokenFrom(current)) {
           try {
             await exchangeManagedAuth(current)
             return
@@ -1329,7 +1351,7 @@ function AppCore() {
       } catch {}
 
       const stored=localStorage.getItem('authorScoutSession') || ''
-      if (!cancelled && stored) {
+      if (!cancelled && epoch===authEpoch.current && stored) {
         await verify(stored)
       } else if (!cancelled) {
         setChecking(false)
@@ -1340,9 +1362,11 @@ function AppCore() {
   }, [])
 
   const logout = async () => {
+    authEpoch.current++
     localStorage.removeItem('authorScoutSession')
-    try { await authClient.signOut() } catch {}
+    localStorage.removeItem('authorScoutSessionInfo')
     setKeyValue(''); setSession(null); setTab('dashboard')
+    try { await authClient.signOut() } catch {}
   }
 
   const resetParams = new URLSearchParams(window.location.search)
@@ -1354,6 +1378,7 @@ function AppCore() {
   />
 
   if (!session) return <Login
+    onRetry={keyValue?()=>verify(keyValue):null}
     onGoogle={startManagedGoogle}
     onEmail={startEmailAuth}
     onForgot={startForgotPassword}

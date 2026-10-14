@@ -39,3 +39,5 @@
 .ld-account-choice{flex-wrap:wrap}.ld-account-choice>label:not(.ld-send-as){min-width:160px;overflow-wrap:anywhere}.ld-account-choice .ld-send-as{flex-basis:100%;display:grid;gap:6px;font-size:12px}.ld-send-as input{min-width:0;width:100%;border:1px solid #d6dcd3;border-radius:7px;background:white;padding:9px;color:#25372f}
 
 @media(max-width:720px){.ld input,.ld select,.ld textarea{font-size:16px!important}.ld-row-actions .ld-btn,.ld-list-tools .ld-btn{min-height:44px}.ld-phone-delivery .ld-actions .ld-btn{width:100%;min-height:48px}.ld-phone-delivery p{line-height:1.6}.ld-language{flex-wrap:wrap}.ld-line{gap:8px}.ld-line span{width:44px}}
+
+.password-toggle-field{display:flex;align-items:center;gap:8px}.password-toggle-field input{flex:1;min-width:0}.password-toggle-field button{min-height:44px;padding:8px 13px;border:1px solid #ccd6ce;border-radius:8px;background:#f4f7f2;color:#204c3e;cursor:pointer}

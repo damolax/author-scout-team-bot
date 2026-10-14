@@ -1874,7 +1874,9 @@ def _web_auth_from_key(key: str) -> dict:
     if not key:
         raise legacy.HTTPException(status_code=401, detail="Missing web access key")
     try:
-        payload=legacy.serializer.loads(key,max_age=WEB_KEY_MAX_AGE_SECONDS)
+        # Persist this signed website login until the browser signs out.
+        # Other token scopes keep their own expiry checks and cannot authenticate here.
+        payload=legacy.serializer.loads(key)
     except Exception:
         raise legacy.HTTPException(status_code=401, detail="Invalid or expired web access key")
     if not isinstance(payload,dict) or payload.get("scope")!="web_login":
