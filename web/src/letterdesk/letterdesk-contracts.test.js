@@ -77,23 +77,24 @@ test('caps stop repeated outreach, cycles are rejected', () => {
 });
 
 test('Message01 can lead to specifically named Message0101Yes and Message0101No branches', () => {
-  assert.equal(normalizeReplyOutcome('Yes'), 'positive');
-  assert.equal(normalizeReplyOutcome('No'), 'negative');
+  assert.equal(normalizeReplyOutcome('Yes'), 'yes');
+  assert.equal(normalizeReplyOutcome('No'), 'no');
   const yes = resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'Yes');
   assert.equal(yes.nextCode, 'Message0101Yes');
   assert.equal(yes.action, 'draft_for_review');
   const no = resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'No');
   assert.equal(no.branchLabel, 'Message0101No');
   assert.equal(no.action, 'stop');
-  assert.equal(no.suppress, true);
+  assert.equal(no.suppress, false);
 });
 
 test('Yes branch can branch again into Message0201Yes or Message0201No', () => {
   const yes = resolveConversationTransition(EXAMPLE_FLOW, 'Message0101Yes', 'Yes');
   const no = resolveConversationTransition(EXAMPLE_FLOW, 'Message0101Yes', 'No');
   assert.equal(yes.nextCode, 'Message0201Yes');
-  assert.equal(no.branchLabel, 'Message0201No');
-  assert.equal(no.action, 'stop');
+  assert.equal(no.nextCode, 'Message0201No');
+  assert.equal(no.action, 'draft_for_review');
+  assert.equal(no.needsHumanApproval, true);
 });
 
 test('branch-labeled workbook columns import without accidentally approving sending', () => {
@@ -107,6 +108,13 @@ test('branch-labeled workbook columns import without accidentally approving send
   });
   assert.deepEqual(new Set(r.message.versions.map(v => v.code)),
     new Set(['MSG-01', 'Message0101Yes', 'Message0101No', 'Message0101Question']));
-  assert.equal(r.message.versions.find(v => v.code === 'Message0101No').terminal, true);
+  assert.equal(r.message.versions.find(v => v.code === 'Message0101No').autoSendEligible, false);
   assert.equal(r.message.versions.every(v => v.autoSendEligible === false), true);
+});
+
+test('explicit negative and unsubscribe differ from a contextual No answer', () => {
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message0101Yes', 'negative').action, 'stop');
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message0101Yes', 'negative').suppress, true);
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message0101Yes', 'opt_out').suppress, true);
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message0101Yes', 'no').nextCode, 'Message0201No');
 });
