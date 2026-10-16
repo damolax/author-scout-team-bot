@@ -78,13 +78,24 @@ export function mapImportRow(serviceKey, row) {
   const messageVersions = [];
   const messageKeys = new Set();
   for (const [column, value] of index.entries()) {
-    const match = column.match(/^message (\d{1,5})$/);
-    if (match && !messageKeys.has(match[1])) {
-      messageKeys.add(match[1]);
-      messageVersions.push({ code: 'MSG-' + match[1], body: value });
+    // Headers: Message 01, Message0101Yes, Message0101No,
+    // Message 0101 Question. The suffix is a branch label, not send approval.
+    const match = column.replace(/\s+/g, '').match(/^message(\d{1,8})(yes|no|question|objection|later|noreply|review|optout|bounce)?$/i);
+    if (match) {
+      const suffixLabels = { yes: 'Yes', no: 'No', question: 'Question', objection: 'Objection', later: 'Later', noreply: 'NoReply', review: 'Review', optout: 'OptOut', bounce: 'Bounce' };
+      const suffix = suffixLabels[(match[2] || '').toLowerCase()] || '';
+      const code = suffix ? 'Message' + match[1] + suffix : 'MSG-' + match[1];
+      if (!messageKeys.has(code)) {
+        messageKeys.add(code);
+        messageVersions.push({
+          code, body: value, reviewRequired: true,
+          terminal: ['No', 'OptOut', 'Bounce'].includes(suffix),
+          autoSendEligible: false
+        });
+      }
     }
   }
-  messageVersions.sort((a, b) => Number(a.code.slice(4)) - Number(b.code.slice(4)));
+  messageVersions.sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
 
   return {
     service_key: mode.key,
