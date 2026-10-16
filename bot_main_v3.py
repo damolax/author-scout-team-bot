@@ -3747,3 +3747,10 @@ async def connection_shutdown():
         except Exception:
             pass
         _http_client = None
+
+
+# Letter Desk 2.0 read-only service endpoints. Development flag defaults off
+# until the Neon ld_* schema has passed staging audits and the UI is ready.
+if os.getenv("LETTERDESK_V2_ENABLED", "false").strip().lower() in {"true", "1", "yes"}:
+    from letterdesk_v2_api import install_letterdesk_v2_routes
+    install_letterdesk_v2_routes(app, legacy.engine, _web_auth)
