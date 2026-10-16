@@ -4,6 +4,8 @@ import Letterdesk from './Letterdesk.jsx'
 import ServiceDashboard from './letterdesk/ServiceDashboard.jsx'
 
 const ENABLE_LETTERDESK_V2 = import.meta.env.VITE_LETTERDESK_V2_UI === 'true'
+const BRAND_NAME = ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'
+const BRAND_TAGLINE = ENABLE_LETTERDESK_V2 ? 'Unified Scouting Workspace' : 'Research Intelligence'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://author-scout-team-bot.onrender.com').replace(/\/$/, '')
 
@@ -165,13 +167,13 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
       <div className="login-card">
         <div className="brand brand-login">
           <div className="brand-mark">AS</div>
-          <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
+          <div><strong>{BRAND_NAME}</strong><span>{BRAND_TAGLINE}</span></div>
         </div>
 
         {forgot ? <>
           <h1>Reset your password</h1>
           <p className="login-copy">
-            Enter the email address for your Author Scout account. We’ll send you a secure reset link.
+            Enter the email address for your {BRAND_NAME} account. We’ll send you a secure reset link.
           </p>
           {error && <div className="alert alert-error">{error}</div>}
           {forgotSent ? <div className="forgot-success">
@@ -199,8 +201,8 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
           <h1>{signup ? 'Create your account' : 'Welcome back'}</h1>
           <p className="login-copy">
             {signup
-              ? 'Create a private Author Scout workspace with your email and password. Email verification is not required to start using the app.'
-              : 'Sign in to your Author Scout workspace.'}
+              ? 'Create a private workspace with your email and password. Email verification is not required to start using the app.'
+              : 'Sign in to your {BRAND_NAME} workspace.'}
           </p>
 
           {error && <div className="alert alert-error">{error}</div>}
@@ -236,7 +238,7 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
           </form>
 
           <button className="auth-switch" onClick={() => setMode(signup ? 'signin' : 'signup')} disabled={busy}>
-            {signup ? 'Already have an account? Sign in' : 'New to Author Scout? Create account'}
+            {signup ? 'Already have an account? Sign in' : 'New to {BRAND_NAME}? Create account'}
           </button>
 
           <p className="login-note">
@@ -276,18 +278,18 @@ function ResetPasswordScreen({ token, errorCode }) {
       <div className="login-card">
         <div className="brand brand-login">
           <div className="brand-mark">AS</div>
-          <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
+          <div><strong>{BRAND_NAME}</strong><span>{BRAND_TAGLINE}</span></div>
         </div>
         {done ? <>
           <div className="forgot-success">
             <div className="forgot-success-icon">✓</div>
             <h1>Password updated</h1>
-            <p>Your new password is ready. You can sign in to Author Scout now.</p>
+            <p>Your new password is ready. You can sign in to {BRAND_NAME} now.</p>
             <a className="button button-auth-email button-block" href="/?signin=1">Continue to sign in</a>
           </div>
         </> : <>
           <h1>Choose a new password</h1>
-          <p className="login-copy">Enter a new password for your Author Scout account.</p>
+          <p className="login-copy">Enter a new password for your {BRAND_NAME} account.</p>
           {error && <div className="alert alert-error">{error}</div>}
           <form className="email-auth-form" onSubmit={submit}>
             <div className="field">
@@ -1166,6 +1168,7 @@ const NAV = [
 ]
 
 function AppCore() {
+  useEffect(() => { if (ENABLE_LETTERDESK_V2) { document.title = 'Letter Desk — Unified Scouting'; const description = document.querySelector('meta[name="description"]'); if (description) description.setAttribute('content', 'Letter Desk — six specialized prospect research and outreach workspaces.') } }, [])
   const authEpoch=useRef(0)
   const [keyValue, setKeyValue] = useState(() => localStorage.getItem('authorScoutSession') || '')
   const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(location.pathname==='/reset-password'||params.has('token')||params.has('error')||params.get('signin')==='1'||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
