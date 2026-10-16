@@ -35,6 +35,9 @@ jobs:
           print("Letterdesk regression rows:", len(parsed["rows"]))
           PY
 
+      - name: Letter Desk Neon API authorization and isolation
+        run: python -m unittest -v tests/test_letterdesk_v2_api.py
+
   web:
     runs-on: ubuntu-latest
     defaults:
