@@ -1,6 +1,6 @@
 import { createAuthClient } from 'better-auth/client'
 
-export const NEON_AUTH_URL = 'https://ep-cool-lake-b5w5dfc2.neonauth.c-7.us-east-2.aws.neon.tech/author_scout_bot/auth'
+export const NEON_AUTH_URL = (import.meta.env.VITE_NEON_AUTH_URL || 'https://ep-cool-lake-b5w5dfc2.neonauth.c-7.us-east-2.aws.neon.tech/author_scout_bot/auth').replace(/\/$/, '')
 
 export const authClient = createAuthClient({
   baseURL: NEON_AUTH_URL,
