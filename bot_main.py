@@ -90,6 +90,7 @@ def init_db():
         "ALTER TABLE messages ADD COLUMN reply_notes TEXT DEFAULT ''",
         "ALTER TABLE messages ADD COLUMN sent_via TEXT DEFAULT ''",
         "ALTER TABLE messages ADD COLUMN auto_sent INTEGER DEFAULT 0",
+        "ALTER TABLE messages ADD COLUMN opened_at TEXT DEFAULT ''",
         "ALTER TABLE prospects ADD COLUMN discovery_platform TEXT DEFAULT ''",
         "ALTER TABLE prospects ADD COLUMN discovery_source_type TEXT DEFAULT ''",
         "ALTER TABLE prospects ADD COLUMN discovery_source_url TEXT DEFAULT ''",

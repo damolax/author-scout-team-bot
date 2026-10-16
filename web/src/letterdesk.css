@@ -43,3 +43,14 @@
 .password-toggle-field{display:flex;align-items:center;gap:8px}.password-toggle-field input{flex:1;min-width:0}.password-toggle-field button{min-height:44px;padding:8px 13px;border:1px solid #ccd6ce;border-radius:8px;background:#f4f7f2;color:#204c3e;cursor:pointer}
 
 .ld-author-navigation{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:16px 20px;border-bottom:1px solid var(--ld-line);background:#f9faf5}.ld-author-navigation span{font-size:11px;color:#65745e;text-align:center}.ld-author-navigation .ld-btn{min-height:44px}@media(max-width:720px){.ld-author-navigation{padding:12px}.ld-author-navigation .ld-btn{padding:10px}}
+
+.ld-state.ready{background:#eef0f3;color:#475569;border-color:#cbd5e1}
+.ld-state.opened{background:#fff3cd;color:#805400;border-color:#dfbd58}
+.ld-state.sent{background:#dcf3e4;color:#1c633b;border-color:#8bcaa2}
+.ld-state.replied{background:#eee7fb;color:#65429a;border-color:#cbb8e8}
+.ld-row-ready{box-shadow:inset 3px 0 #94a3b8}
+.ld-row-opened{box-shadow:inset 3px 0 #d49b18}
+.ld-row-sent{box-shadow:inset 3px 0 #31935a}
+.ld-row-replied{box-shadow:inset 3px 0 #8960bd}
+.ld-status-legend{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 18px}
+.ld-status-legend small{font-size:12px;color:#64716a;line-height:1.6}

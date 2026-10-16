@@ -2662,7 +2662,7 @@ async def web_messages(request: legacy.Request, status: str="ready", limit: int=
             OR lower(COALESCE(m.recipient_email,p.email,'')) LIKE :q)"""
     rs=legacy.rows(f"""SELECT m.id,m.prospect_id,m.subject,m.body,m.body_english,m.status,
         m.sender_email,m.sent_by_user_id,m.sent_at,m.created_at,m.updated_at,
-        m.reply_status,m.replied_at,m.reply_notes,m.sent_via,m.auto_sent,
+        m.reply_status,m.replied_at,m.reply_notes,m.sent_via,m.auto_sent,m.opened_at,
         p.name AS author_name,p.email AS author_email,p.country AS author_country,
         p.genre AS author_genre,p.website AS author_website,p.bio AS author_bio,p.books AS author_books,p.email_source_url,
         COALESCE(NULLIF(m.recipient_email,''),p.email) AS recipient
@@ -2700,7 +2700,13 @@ async def web_message_status(request: legacy.Request, message_id: int):
     t=legacy.iso()
     if m.get("status")=="deleted" or (action=="sent" and m.get("status")=="sent"):
         return {"ok":True,"message":m}
-    if action=="sent":
+    if action=="opened":
+        legacy.execq("""UPDATE messages SET opened_at=:d,updated_at=:d
+            WHERE id=:i AND status='ready' AND COALESCE(reply_status,'')<>'replied'
+            AND COALESCE(opened_at,'')=''
+            AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",
+            d=t,i=message_id,u=uid)
+    elif action=="sent":
         legacy.execq("""UPDATE messages SET status='sent',sent_by_user_id=:u,sent_at=:d,
             updated_at=:d,sent_via=CASE WHEN COALESCE(sent_via,'')='' THEN 'manual_web' ELSE sent_via END
             WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",u=uid,d=t,i=message_id)
@@ -2709,11 +2715,11 @@ async def web_message_status(request: legacy.Request, message_id: int):
             WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",d=t,i=message_id,u=uid)
     elif action=="ready":
         legacy.execq("""UPDATE messages SET status='ready',sent_by_user_id=NULL,sent_at='',
-            sender_email='',sent_via='',auto_sent=0,updated_at=:d
+            sender_email='',sent_via='',auto_sent=0,opened_at='',updated_at=:d
             WHERE id=:i AND prospect_id IN (SELECT id FROM prospects WHERE claimed_by_user_id=:u)""",
             d=t,i=message_id,u=uid)
     else:
-        raise legacy.HTTPException(status_code=400,detail="Status must be sent, replied, or ready")
+        raise legacy.HTTPException(status_code=400,detail="Status must be opened, sent, replied, or ready")
     return {"ok":True,"message":_web_message(message_id,uid)}
 
 
