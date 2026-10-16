@@ -3687,6 +3687,10 @@ legacy.handle = enhanced_handle
 @app.on_event("startup")
 async def connection_startup():
     global _http_client
+    # Staging is read-only: never run background work or email outreach on a data snapshot.
+    if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true", "1", "yes"}:
+        print("LETTERDESK_STAGING_ISOLATED true; all Scout background workers disabled")
+        return
     init_connection_db()
     if _http_client is None:
         _http_client = legacy.httpx.AsyncClient(
@@ -3754,3 +3758,21 @@ async def connection_shutdown():
 if os.getenv("LETTERDESK_V2_ENABLED", "false").strip().lower() in {"true", "1", "yes"}:
     from letterdesk_v2_api import install_letterdesk_v2_routes
     install_letterdesk_v2_routes(app, legacy.engine, _web_auth)
+
+# Enforce an isolated, read-only preview. This protects the staging Neon snapshot
+# against legacy state-changing routes (including email sends and source-scanning jobs).
+if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true", "1", "yes"}:
+    @app.middleware("http")
+    async def _letterdesk_staging_read_only(request, call_next):
+        from fastapi.responses import JSONResponse
+        path = request.url.path
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        allowed_get = (
+            path in {"/api/v1/health", "/api/v1/session"}
+            or path.startswith("/api/v2/letterdesk/")
+        )
+        allowed_post = path == "/api/v1/auth/neon-session"
+        if (request.method == "GET" and allowed_get) or (request.method == "POST" and allowed_post):
+            return await call_next(request)
+        return JSONResponse({"detail": "This preview is read-only. Sending, scraping and mutating operations are disabled."}, status_code=403)
