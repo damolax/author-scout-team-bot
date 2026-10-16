@@ -5,7 +5,7 @@
 
 ALTER TABLE public.ld_conversations ADD COLUMN IF NOT EXISTS legacy_message_id integer;
 
-CREATE UNIQUE INDEX IF NOT EXISTS ld_conversations_legacy_message_id_key ON public.ld_conversations(legacy_message_id) WHERE legacy_message_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ld_conversations_legacy_message_id_key ON public.ld_conversations(legacy_message_id);
 
 INSERT INTO public.ld_service_workspaces(team_id,service_key,display_name)
  SELECT t.id,s.service_key,s.display_name FROM public.teams t CROSS JOIN
