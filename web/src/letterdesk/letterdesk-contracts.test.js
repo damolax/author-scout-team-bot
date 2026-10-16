@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SERVICE_MODES, mapImportRow, getImportColumns } from './service-modes.js';
-import { EXAMPLE_FLOW, validateConversationFlow, resolveConversationTransition } from './conversation-flow.js';
+import { EXAMPLE_FLOW, validateConversationFlow, resolveConversationTransition, normalizeReplyOutcome } from './conversation-flow.js';
 
 test('six service workspaces have distinct schemas', () => {
   assert.equal(SERVICE_MODES.length, 6);
@@ -59,19 +59,54 @@ test('example branching flow is valid', () => {
 });
 
 test('positive and question replies yield different reviewed branches', () => {
-  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'MSG-01', 'positive').nextCode, 'MSG-0101');
-  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'MSG-01', 'question').nextCode, 'MSG-0102');
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'positive').nextCode, 'Message0101Yes');
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'question').nextCode, 'Message0101Question');
 });
 
 test('declines and opt-outs stop; unknown replies require review', () => {
-  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'MSG-01', 'negative').action, 'stop');
-  const decline = resolveConversationTransition(EXAMPLE_FLOW, 'MSG-01', 'opt_out');
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'negative').action, 'stop');
+  const decline = resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'opt_out');
   assert.equal(decline.suppress, true);
-  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'MSG-01', 'uncertain').action, 'manual_review');
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'uncertain').action, 'manual_review');
 });
 
 test('caps stop repeated outreach, cycles are rejected', () => {
-  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'MSG-01', 'no_reply', {noReplyFollowups: 1}).action, 'stop');
-  const cyclic = { ...EXAMPLE_FLOW, edges: [...EXAMPLE_FLOW.edges, { from:'MSG-0201', outcome:'question', to:'MSG-01', action:'draft_for_review'}] };
+  assert.equal(resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'no_reply', {noReplyFollowups: 1}).action, 'stop');
+  const cyclic = { ...EXAMPLE_FLOW, edges: [...EXAMPLE_FLOW.edges, { from:'Message0201Yes', outcome:'question', to:'Message01', action:'draft_for_review'}] };
   assert.ok(validateConversationFlow(cyclic).some(x=>x.includes('Cycle')));
+});
+
+test('Message01 can lead to specifically named Message0101Yes and Message0101No branches', () => {
+  assert.equal(normalizeReplyOutcome('Yes'), 'positive');
+  assert.equal(normalizeReplyOutcome('No'), 'negative');
+  const yes = resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'Yes');
+  assert.equal(yes.nextCode, 'Message0101Yes');
+  assert.equal(yes.action, 'draft_for_review');
+  const no = resolveConversationTransition(EXAMPLE_FLOW, 'Message01', 'No');
+  assert.equal(no.branchLabel, 'Message0101No');
+  assert.equal(no.action, 'stop');
+  assert.equal(no.suppress, true);
+});
+
+test('Yes branch can branch again into Message0201Yes or Message0201No', () => {
+  const yes = resolveConversationTransition(EXAMPLE_FLOW, 'Message0101Yes', 'Yes');
+  const no = resolveConversationTransition(EXAMPLE_FLOW, 'Message0101Yes', 'No');
+  assert.equal(yes.nextCode, 'Message0201Yes');
+  assert.equal(no.branchLabel, 'Message0201No');
+  assert.equal(no.action, 'stop');
+});
+
+test('branch-labeled workbook columns import without accidentally approving sending', () => {
+  const r = mapImportRow('author', {
+    Author: 'Sample Author',
+    Email: 'author@example.org',
+    'Message 01': 'Hello',
+    Message0101Yes: 'Wonderful, tell me more',
+    Message0101No: 'Thank you for your time',
+    Message0101Question: 'Happy to explain'
+  });
+  assert.deepEqual(new Set(r.message.versions.map(v => v.code)),
+    new Set(['MSG-01', 'Message0101Yes', 'Message0101No', 'Message0101Question']));
+  assert.equal(r.message.versions.find(v => v.code === 'Message0101No').terminal, true);
+  assert.equal(r.message.versions.every(v => v.autoSendEligible === false), true);
 });
