@@ -3,14 +3,14 @@
 // Classification comes ONLY from authorized reply sync or human review.
 // This module NEVER sends an email.
 export const REPLY_OUTCOMES = Object.freeze([
-  'positive', 'question', 'objection', 'not_now', 'negative',
+  'yes', 'no', 'positive', 'question', 'objection', 'not_now', 'negative',
   'opt_out', 'no_reply', 'bounce', 'uncertain'
 ]);
 const TERMINAL_OUTCOMES = new Set(['negative', 'opt_out', 'bounce']);
 const VALID_ACTIONS = new Set(['draft_for_review', 'queue_approved', 'stop', 'wait', 'manual_review']);
 const NODE_CODE_RE = /^(?:MSG-\d{1,6}|Message\d{2,8}(?:Yes|No|Question|Objection|Later|NoReply|Review|OptOut|Bounce)?)$/;
 const RESPONSE_ALIASES = Object.freeze({
-  yes: 'positive', no: 'negative', positive: 'positive', negative: 'negative',
+  yes: 'yes', no: 'no', positive: 'positive', negative: 'negative',
   question: 'question', objection: 'objection', later: 'not_now',
   not_now: 'not_now', no_reply: 'no_reply', bounced: 'bounce',
   optout: 'opt_out', opt_out: 'opt_out'
@@ -36,18 +36,22 @@ export const EXAMPLE_FLOW = Object.freeze({
     { code: 'Message0101Later', stage: 'terminal', subject: '', body: '', reviewRequired: true },
     { code: 'Message0101NoReply', stage: 'followup', subject: '', body: '', reviewRequired: true },
     { code: 'Message0201Yes', stage: 'proposal_discussion', subject: '', body: '', reviewRequired: true },
-    { code: 'Message0201No', stage: 'terminal', subject: '', body: '', reviewRequired: true },
+    { code: 'Message0201No', stage: 'alternative', subject: '', body: '', reviewRequired: true },
     { code: 'Message0201Question', stage: 'question', subject: '', body: '', reviewRequired: true },
   ],
   edges: [
+    { from: 'Message01', outcome: 'yes', to: 'Message0101Yes', action: 'draft_for_review' },
     { from: 'Message01', outcome: 'positive', to: 'Message0101Yes', action: 'draft_for_review' },
+    { from: 'Message01', outcome: 'no', to: null, action: 'stop', branchLabel: 'Message0101No' },
     { from: 'Message01', outcome: 'negative', to: null, action: 'stop', branchLabel: 'Message0101No' },
     { from: 'Message01', outcome: 'question', to: 'Message0101Question', action: 'draft_for_review' },
     { from: 'Message01', outcome: 'objection', to: 'Message0101Objection', action: 'draft_for_review' },
     { from: 'Message01', outcome: 'not_now', to: null, action: 'stop', branchLabel: 'Message0101Later' },
     { from: 'Message01', outcome: 'no_reply', to: 'Message0101NoReply', action: 'draft_for_review' },
+    { from: 'Message0101Yes', outcome: 'yes', to: 'Message0201Yes', action: 'draft_for_review' },
     { from: 'Message0101Yes', outcome: 'positive', to: 'Message0201Yes', action: 'draft_for_review' },
-    { from: 'Message0101Yes', outcome: 'negative', to: null, action: 'stop', branchLabel: 'Message0201No' },
+    { from: 'Message0101Yes', outcome: 'no', to: 'Message0201No', action: 'draft_for_review' },
+    { from: 'Message0101Yes', outcome: 'negative', to: null, action: 'stop' },
     { from: 'Message0101Yes', outcome: 'question', to: 'Message0201Question', action: 'draft_for_review' },
   ]
 });
@@ -115,7 +119,7 @@ export function resolveConversationTransition(flow, currentCode, outcome, state 
   if ((state.messageCount || 0) >= flow.maxMessagesPerContact) return { action: 'stop', reason: 'message_cap_reached' };
   if (knownOutcome === 'no_reply' && (state.noReplyFollowups || 0) >= flow.maxNoReplyFollowups) return { action: 'stop', reason: 'followup_cap_reached' };
   if (!edge) return { action: 'manual_review', reason: 'No approved branch for this situation.' };
-  if (edge.action === 'stop') return { action: 'stop', reason: knownOutcome, branchLabel: edge.branchLabel || null };
+  if (edge.action === 'stop') return { action: 'stop', reason: knownOutcome, branchLabel: edge.branchLabel || null, suppress: false };
   if (edge.action === 'wait') return { action: 'wait', nextCode: edge.to || null };
   if (edge.action === 'queue_approved' && !state.campaignApproved) {
     return { action: 'manual_review', reason: 'Campaign approval required.', nextCode: edge.to };
