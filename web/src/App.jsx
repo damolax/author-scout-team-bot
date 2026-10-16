@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react'
 import { authClient, sessionTokenFrom } from './auth.js'
 import Letterdesk from './Letterdesk.jsx'
+import ServiceDashboard from './letterdesk/ServiceDashboard.jsx'
+
+const ENABLE_LETTERDESK_V2 = import.meta.env.VITE_LETTERDESK_V2_UI === 'true'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://author-scout-team-bot.onrender.com').replace(/\/$/, '')
 
@@ -1155,6 +1158,7 @@ function Connections({ keyValue, active }) {
 
 const NAV = [
   ['dashboard','Overview','⌂'],
+  ...(ENABLE_LETTERDESK_V2 ? [['services','Service Workspaces','◈']] : []),
   ['research','Scout','⌕'],
   ['authors','Authors','A'],
   ['messages','Letterdesk','✉'],
@@ -1168,7 +1172,7 @@ function AppCore() {
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
   const [loginStatus, setLoginStatus] = useState('')
-  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') === 'messages' ? 'messages' : 'dashboard')
+  const [tab, setTab] = useState(() => { const requested = new URLSearchParams(window.location.search).get('tab'); return requested === 'messages' ? 'messages' : ENABLE_LETTERDESK_V2 && requested === 'services' ? 'services' : 'dashboard' })
 
   const verify = useCallback(async (rawKey) => {
     const epoch=authEpoch.current
@@ -1394,7 +1398,7 @@ function AppCore() {
     <div className="app-frame">
       <div className="app-shell">
         <header className="topbar">
-          <button className="logo-pill" onClick={() => setTab('dashboard')}>Author Scout</button>
+          <button className="logo-pill" onClick={() => setTab('dashboard')}>{ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'}</button>
 
           <nav className="topnav" aria-label="Primary navigation">
             {NAV.map(([id,label]) => (
@@ -1407,7 +1411,7 @@ function AppCore() {
           <div className="top-actions">
             <div className="workspace-summary">
               <span>{displayName}</span>
-              <small>Author Scout</small>
+              <small>{ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'}</small>
             </div>
             <button className="avatar-button" onClick={logout} title="Sign out">{initials}</button>
           </div>
@@ -1424,6 +1428,9 @@ function AppCore() {
           <div className={tab === 'dashboard' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'dashboard'}>
             <Dashboard keyValue={keyValue} session={session} active={tab === 'dashboard'} />
           </div>
+          {ENABLE_LETTERDESK_V2 && <div className={tab === 'services' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'services'}>
+            <ServiceDashboard active={tab === 'services'} keyValue={keyValue} request={request} />
+          </div>}
           <div className={tab === 'research' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'research'}>
             <Research keyValue={keyValue} active={tab === 'research'} />
           </div>
