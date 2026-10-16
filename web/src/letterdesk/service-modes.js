@@ -89,7 +89,7 @@ export function mapImportRow(serviceKey, row) {
         messageKeys.add(code);
         messageVersions.push({
           code, body: value, reviewRequired: true,
-          terminal: ['No', 'OptOut', 'Bounce'].includes(suffix),
+          terminal: ['OptOut', 'Bounce'].includes(suffix),
           autoSendEligible: false
         });
       }
