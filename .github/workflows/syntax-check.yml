@@ -52,5 +52,7 @@ jobs:
           node --check ../extension/gmail.js
           node --check ../extension/worker.js
           node --test ../tests/test_extension.mjs ../tests/test_extension_worker.mjs
+      - name: Letter Desk six-workspace imports and branching safety
+        run: node --test src/letterdesk/letterdesk-contracts.test.js
       - name: Build Vite dashboard
         run: npm run build
