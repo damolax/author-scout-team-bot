@@ -109,7 +109,7 @@ class AppErrorBoundary extends React.Component {
       <div className="login-shell">
         <div className="login-card">
           <div className="brand brand-login">
-            <div className="brand-mark">AS</div>
+            <div className="brand-mark">{ENABLE_LETTERDESK_V2 ? "LD" : "AS"}</div>
             <div><strong>Author Scout</strong><span>Workspace recovery</span></div>
           </div>
           <h1>We hit a display problem.</h1>
@@ -166,7 +166,7 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
     <div className="login-shell">
       <div className="login-card">
         <div className="brand brand-login">
-          <div className="brand-mark">AS</div>
+          <div className="brand-mark">{ENABLE_LETTERDESK_V2 ? "LD" : "AS"}</div>
           <div><strong>{BRAND_NAME}</strong><span>{BRAND_TAGLINE}</span></div>
         </div>
 
@@ -202,7 +202,7 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
           <p className="login-copy">
             {signup
               ? 'Create a private workspace with your email and password. Email verification is not required to start using the app.'
-              : 'Sign in to your {BRAND_NAME} workspace.'}
+              : `Sign in to your ${BRAND_NAME} workspace.`}
           </p>
 
           {error && <div className="alert alert-error">{error}</div>}
@@ -238,7 +238,7 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
           </form>
 
           <button className="auth-switch" onClick={() => setMode(signup ? 'signin' : 'signup')} disabled={busy}>
-            {signup ? 'Already have an account? Sign in' : 'New to {BRAND_NAME}? Create account'}
+            {signup ? 'Already have an account? Sign in' : `New to ${BRAND_NAME}? Create account`}
           </button>
 
           <p className="login-note">
@@ -277,7 +277,7 @@ function ResetPasswordScreen({ token, errorCode }) {
     <div className="login-shell">
       <div className="login-card">
         <div className="brand brand-login">
-          <div className="brand-mark">AS</div>
+          <div className="brand-mark">{ENABLE_LETTERDESK_V2 ? "LD" : "AS"}</div>
           <div><strong>{BRAND_NAME}</strong><span>{BRAND_TAGLINE}</span></div>
         </div>
         {done ? <>
