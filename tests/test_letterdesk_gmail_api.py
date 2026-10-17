@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from letterdesk_gmail_api import (
-    BASIC_SCOPES,ALIAS_SCOPE,alias_candidates,build_authorization_url,
+    BASIC_SCOPES,ALIAS_SCOPE,READ_SCOPE,alias_candidates,build_authorization_url,
     hash_state,normalize_email,install_gmail_connection_api,google_config,
 )
 
@@ -27,6 +27,13 @@ class GmailConnectionTests(unittest.TestCase):
         uri=build_authorization_url("client-id","https://test.onrender.com/api/v2/letterdesk/gmail/callback",
                                     "example-state",True)
         self.assertIn("gmail.settings.basic",uri)
+
+    def test_gmail_read_only_requires_separate_explicit_scope_choice(self):
+        default=build_authorization_url("client-id","https://api.test/oauth","nonce")
+        self.assertNotIn("gmail.readonly",default)
+        enabled=build_authorization_url("client-id","https://api.test/oauth","nonce",False,True)
+        self.assertIn("gmail.readonly",enabled)
+        self.assertNotIn("gmail.settings.basic",enabled)
 
     def test_only_google_accepted_aliases_are_verified(self):
         data={"sendAs":[
