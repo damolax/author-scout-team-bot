@@ -3762,6 +3762,12 @@ if os.getenv("LETTERDESK_V2_ENABLED", "false").strip().lower() in {"true", "1", 
 # Enforce an isolated, read-only preview. This protects the staging Neon snapshot
 # against legacy state-changing routes (including email sends and source-scanning jobs).
 if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true", "1", "yes"}:
+    from letterdesk_staging_auth import install_staging_email_auth
+    install_staging_email_auth(
+        app, neon_session=_neon_auth_session,
+        get_or_create_account=_get_or_create_web_account,
+        issue_app_session=_issue_web_session
+    )
     @app.middleware("http")
     async def _letterdesk_staging_read_only(request, call_next):
         from fastapi.responses import JSONResponse
@@ -3772,7 +3778,7 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             path in {"/api/v1/health", "/api/v1/session"}
             or path.startswith("/api/v2/letterdesk/")
         )
-        allowed_post = path == "/api/v1/auth/neon-session"
+        allowed_post = path in {"/api/v1/auth/neon-session", "/api/v2/letterdesk/auth/email"}
         if (request.method == "GET" and allowed_get) or (request.method == "POST" and allowed_post):
             return await call_next(request)
         return JSONResponse({"detail": "This preview is read-only. Sending, scraping and mutating operations are disabled."}, status_code=403)
