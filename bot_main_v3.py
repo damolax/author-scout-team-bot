@@ -3739,6 +3739,18 @@ async def connection_startup():
 
 
 @app.on_event("startup")
+async def letterdesk_reply_startup():
+    # Optional read-only polling of known sent threads. Never changes the
+    # production delivery flag and never sends any mail.
+    if os.getenv("LETTERDESK_V2_ENABLED", "false").lower() not in ("true","1","yes"):
+        return
+    from letterdesk_gmail_reply_sync import read_enabled, gmail_reply_worker
+    if read_enabled():
+        app.state.ld_reply_worker = asyncio.create_task(gmail_reply_worker(legacy.engine))
+        print("LETTERDESK_REPLY read-only thread watcher started")
+
+
+@app.on_event("startup")
 async def letterdesk_campaign_startup():
     # Never start a delivery worker in isolated staging, even when draft
     # editing and OAuth account connections are enabled for QA.
@@ -3753,7 +3765,7 @@ async def letterdesk_campaign_startup():
 @app.on_event("shutdown")
 async def connection_shutdown():
     global _http_client
-    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker","ld_scout_worker","ld_delivery_worker"):
+    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker","ld_scout_worker","ld_delivery_worker","ld_reply_worker"):
         task = getattr(app.state, task_name, None)
         if task:
             task.cancel()
@@ -3784,6 +3796,8 @@ if os.getenv("LETTERDESK_V2_ENABLED", "false").strip().lower() in {"true", "1", 
     install_gmail_connection_api(app, legacy.engine, _web_auth)
     from letterdesk_campaign_api import install_campaign_api
     install_campaign_api(app, legacy.engine, _web_auth)
+    from letterdesk_reply_api import install_reply_api
+    install_reply_api(app, legacy.engine, _web_auth)
 
 # Enforce an isolated, read-only preview. This protects the staging Neon snapshot
 # against legacy state-changing routes (including email sends and source-scanning jobs).
@@ -3830,6 +3844,22 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             )
             and os.getenv("LETTERDESK_CAMPAIGN_WRITE_ENABLED", "false").lower() in ("true", "1", "yes")
         )
+        reply_preview = (
+            request.method == "POST"
+            and path.startswith("/api/v2/letterdesk/services/")
+            and path.endswith("/replies/classify")
+        )
+        reply_write = (
+            request.method == "POST"
+            and path.startswith("/api/v2/letterdesk/services/")
+            and "/replies/" in path
+            and os.getenv("LETTERDESK_REPLY_WRITE_ENABLED", "false").lower() in ("true","1","yes")
+            and (
+                path.endswith("/replies/manual")
+                or path.endswith("/review")
+                or path.endswith("/flow")
+            )
+        )
         # File previews are read-only; confirmations are separately feature-gated.
         allow_import_preview = (
             request.method == "POST" and path.startswith("/api/v2/letterdesk/services/")
@@ -3863,6 +3893,6 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             and (path.endswith("/scout/jobs") or
                  ("/scout/jobs/" in path and path.endswith("/run")))
         )
-        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write)) or flow_write:
+        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write or reply_preview or reply_write)) or flow_write:
             return await call_next(request)
         return JSONResponse({"detail": "This preview is read-only. Sending, scraping and mutating operations are disabled."}, status_code=403)
