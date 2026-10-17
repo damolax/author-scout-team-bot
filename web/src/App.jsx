@@ -1197,7 +1197,7 @@ function AppCore() {
   }, [])
   const authEpoch=useRef(0)
   const [keyValue, setKeyValue] = useState(() => localStorage.getItem('authorScoutSession') || '')
-  const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(location.pathname==='/reset-password'||params.has('token')||params.has('error')||params.get('signin')==='1'||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
+  const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(location.pathname==='/reset-password'||params.has('token')||params.has('error')||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
   const [loginStatus, setLoginStatus] = useState('')
@@ -1218,6 +1218,11 @@ function AppCore() {
       setKeyValue(key)
       setSession(s)
       localStorage.setItem('authorScoutSessionInfo',JSON.stringify({key,session:s}))
+      const params=new URLSearchParams(window.location.search)
+      if(params.has('signin')){
+        params.delete('signin')
+        window.history.replaceState({},document.title,window.location.pathname+(params.toString()?'?'+params.toString():''))
+      }
       setLoginStatus('')
       return true
     } catch(e) {
@@ -1316,6 +1321,11 @@ function AppCore() {
         setKeyValue(result.session)
         setSession(sessionInfo)
         setTab('services')
+        const params=new URLSearchParams(window.location.search)
+        if(params.has('signin')){
+          params.delete('signin')
+          window.history.replaceState({},document.title,window.location.pathname+(params.toString()?'?'+params.toString():''))
+        }
         setLoginError('')
         setLoginStatus('')
         return
@@ -1328,6 +1338,7 @@ function AppCore() {
     } catch(e) {
       setLoginError(e?.message || 'Authentication failed.')
       setLoginStatus('')
+    } finally {
       setChecking(false)
     }
   }, [exchangeManagedAuth])
@@ -1383,13 +1394,9 @@ function AppCore() {
     const epoch=authEpoch.current
     const boot=async () => {
       const params=new URLSearchParams(window.location.search)
-      // Recovery pages must not race automatic restoration of an old session.
-      if (window.location.pathname === '/reset-password' || params.has('token') || params.has('error') || params.get('signin') === '1') {
-        if (params.get('signin') === '1') {
-          localStorage.removeItem('authorScoutSession')
-    localStorage.removeItem('authorScoutSessionInfo')
-          setKeyValue('')
-        }
+      // ?signin=1 is a login link, never a sign-out instruction.
+      // Restoring a saved session must work after reload on that URL.
+      if (window.location.pathname === '/reset-password' || params.has('token') || params.has('error')) {
         setChecking(false)
         return
       }
