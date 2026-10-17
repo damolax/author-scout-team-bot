@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState, useRef } from 'react'
 import { authClient, sessionTokenFrom } from './auth.js'
 import Letterdesk from './Letterdesk.jsx'
 import ServiceDashboard from './letterdesk/ServiceDashboard.jsx'
+import {isPasswordRecovery,withoutSigninHint,shouldTryStoredSession} from './letterdesk/session-policy.js'
 
 const ENABLE_LETTERDESK_V2 = import.meta.env.VITE_LETTERDESK_V2_UI === 'true'
 const BRAND_NAME = ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'
@@ -1197,7 +1198,7 @@ function AppCore() {
   }, [])
   const authEpoch=useRef(0)
   const [keyValue, setKeyValue] = useState(() => localStorage.getItem('authorScoutSession') || '')
-  const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(location.pathname==='/reset-password'||params.has('token')||params.has('error')||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
+  const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(isPasswordRecovery(window.location.href)||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
   const [loginStatus, setLoginStatus] = useState('')
@@ -1221,7 +1222,7 @@ function AppCore() {
       const params=new URLSearchParams(window.location.search)
       if(params.has('signin')){
         params.delete('signin')
-        window.history.replaceState({},document.title,window.location.pathname+(params.toString()?'?'+params.toString():''))
+        window.history.replaceState({},document.title,withoutSigninHint(window.location.href))
       }
       setLoginStatus('')
       return true
@@ -1324,7 +1325,7 @@ function AppCore() {
         const params=new URLSearchParams(window.location.search)
         if(params.has('signin')){
           params.delete('signin')
-          window.history.replaceState({},document.title,window.location.pathname+(params.toString()?'?'+params.toString():''))
+          window.history.replaceState({},document.title,withoutSigninHint(window.location.href))
         }
         setLoginError('')
         setLoginStatus('')
@@ -1396,7 +1397,7 @@ function AppCore() {
       const params=new URLSearchParams(window.location.search)
       // ?signin=1 is a login link, never a sign-out instruction.
       // Restoring a saved session must work after reload on that URL.
-      if (window.location.pathname === '/reset-password' || params.has('token') || params.has('error')) {
+      if (isPasswordRecovery(window.location.href)) {
         setChecking(false)
         return
       }
@@ -1419,7 +1420,7 @@ function AppCore() {
       }
 
       const saved=localStorage.getItem('authorScoutSession') || ''
-      if(!cancelled&&saved&&await verify(saved))return
+      if(!cancelled&&shouldTryStoredSession(window.location.href,saved)&&await verify(saved))return
 
       // Email/password login may leave a valid managed Neon Auth session.
       // Prefer that fresh identity before any stale Author Scout local session.
