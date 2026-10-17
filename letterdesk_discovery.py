@@ -267,3 +267,51 @@ def website_identity(website: str, email: str, name: str, service_key: str) -> s
         if email: return "email:"+email.lower()
         return "author:"+re.sub(r"[^a-z0-9]+","-",name.lower()).strip("-")[:80]+":"+host
     return "site:"+host if host else "email:"+email.lower()
+
+
+def search_google_places(query: str, api_key: str, max_results: int = 8, *, client=None) -> list[dict]:
+    """Official Google Places Text Search (New), not scraping Google Maps UI.
+
+    Requires an enabled Places API (New) and a budget/quotas set in Google Cloud.
+    Google listing info is treated as third-party evidence, not contact verification.
+    """
+    if not api_key or not api_key.strip():
+        raise ValueError("Google Places API is not configured for the Maps workspace")
+    query=_clean(query,150)
+    if len(query)<4: raise ValueError("Specify a business type and location")
+    owned=client is None
+    client=client or httpx.Client(timeout=12,trust_env=False)
+    try:
+        res=client.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            headers={
+                "X-Goog-Api-Key":api_key,
+                "X-Goog-FieldMask":"places.id,places.displayName,places.websiteUri,places.googleMapsUri,places.formattedAddress,places.primaryType",
+                "Content-Type":"application/json",
+            },
+            json={"textQuery":query,"maxResultCount":max(1,min(int(max_results),10))},
+        )
+        if res.status_code != 200:
+            raise RuntimeError("Google Places request failed; confirm API authorization, permissions and billing")
+        listings=[]
+        for p in res.json().get("places",[])[:10]:
+            pid=_clean(p.get("id"),160)
+            if not pid:continue
+            website=p.get("websiteUri") or ""
+            try: website=normalized_public_url(website,resolve_dns=False)
+            except ValueError: website=""
+            maps_url=p.get("googleMapsUri") or ""
+            if not maps_url.startswith("https://www.google.com/maps/") and not maps_url.startswith("https://maps.google.com/"):
+                maps_url=""
+            listings.append({
+                "name":_clean((p.get("displayName") or {}).get("text") or "",120),
+                "place_id":pid,
+                "website":website,
+                "maps_url":maps_url,
+                "address":_clean(p.get("formattedAddress"),250),
+                "category":_clean(p.get("primaryType"),100),
+                "search_query":query,
+            })
+        return listings
+    finally:
+        if owned:client.close()
