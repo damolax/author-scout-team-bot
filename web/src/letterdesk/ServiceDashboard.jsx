@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { SERVICE_MODES } from './service-modes.js'
 import './service-dashboard.css'
 import ScoutingStudio from './ScoutingStudio.jsx'
+import ImportStudio from './ImportStudio.jsx'
 
 const SERVICE_ICONS = Object.freeze({
   author: '✦', automation: '⟲', 'website-design': '▣',
@@ -141,6 +142,7 @@ export default function ServiceDashboard({ active, keyValue, request }) {
       </div>
 
       <ScoutingStudio key={serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
+      <ImportStudio key={'import-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} active={active} onImported={()=>setReload(n=>n+1)} />
 
       <div className="ld2-metrics" aria-label="Service performance">
         {[
@@ -174,7 +176,7 @@ export default function ServiceDashboard({ active, keyValue, request }) {
               {loading
                 ? <tr><td colSpan={4} className="ld2-empty">Loading verified workspace data…</td></tr>
                 : rows.length === 0
-                ? <tr><td colSpan={4} className="ld2-empty">No prospects found for this service. Use the template to prepare an import; scouting and upload workflows are being integrated.</td></tr>
+                ? <tr><td colSpan={4} className="ld2-empty">No prospects found for this service yet. Open the import panel or Scouting Studio to add prospects.</td></tr>
                 : rows.map(lead => <tr key={lead.opportunity_id}>
                   <td><strong>{lead.name}</strong><small>{[lead.city, lead.country].filter(Boolean).join(' · ') || current.noun}</small></td>
                   <td>{lead.email || <span className="ld2-muted">Not found</span>}</td>
