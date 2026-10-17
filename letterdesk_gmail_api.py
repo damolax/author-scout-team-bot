@@ -26,6 +26,7 @@ USERINFO_URL="https://openidconnect.googleapis.com/v1/userinfo"
 SEND_AS_URL="https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs"
 BASIC_SCOPES=("openid","email","https://www.googleapis.com/auth/gmail.send")
 ALIAS_SCOPE="https://www.googleapis.com/auth/gmail.settings.basic"
+READ_SCOPE="https://www.googleapis.com/auth/gmail.readonly"
 EMAIL_RE=re.compile(r"^[^@\s<>;,]{1,80}@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}$")
 ALLOWED_REDIRECT_HOSTS=(".onrender.com",)
 MAX_CONNECTIONS_PER_TEAM=120
@@ -69,8 +70,8 @@ def google_config():
 def hash_state(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
-def build_authorization_url(client_id,redirect,state,with_aliases=False):
-    scopes=BASIC_SCOPES+((ALIAS_SCOPE,) if with_aliases else ())
+def build_authorization_url(client_id,redirect,state,with_aliases=False,with_replies=False):
+    scopes=BASIC_SCOPES+((ALIAS_SCOPE,) if with_aliases else ())+((READ_SCOPE,) if with_replies else ())
     return AUTH_URL+"?"+urlencode({
         "client_id":client_id,
         "redirect_uri":redirect,
@@ -161,6 +162,7 @@ def install_gmail_connection_api(app:FastAPI,engine,authenticate):
         return {"ok":True,"connections":[{
             "id":r["id"],"email":r["primary_email"],"status":r["status"],
             "alias_access":ALIAS_SCOPE in (r["scopes"] or []),
+            "reply_access":READ_SCOPE in (r["scopes"] or []),
             "owner_is_you":int(r["web_account_id"])==account,
             "verified_senders":int(r["verified_senders"] or 0),
         } for r in rs],"oauth_enabled":enabled()}
@@ -172,6 +174,9 @@ def install_gmail_connection_api(app:FastAPI,engine,authenticate):
         cid,_,redirect,frontend=google_config()
         body=await request.json()
         aliases=bool(body.get("requestAliasVerification",False)) if isinstance(body,dict) else False
+        replies=bool(body.get("requestReplyMonitoring",False)) if isinstance(body,dict) else False
+        if replies and os.getenv("LETTERDESK_GMAIL_READ_OAUTH_ENABLED","false").lower() not in ("true","1","yes"):
+            raise HTTPException(403,"Gmail reply-reading permission is not enabled for this staging app")
         nonce=secrets.token_urlsafe(32)
         with engine.begin() as db:
             count=db.execute(text("""SELECT count(*) FROM public.ld_gmail_connections
@@ -181,9 +186,9 @@ def install_gmail_connection_api(app:FastAPI,engine,authenticate):
                 (team_id,web_account_id,nonce_sha256,requested_scope)
                 VALUES(:team,:account,:hash,:scope)"""),{
                     "team":team,"account":account,"hash":hash_state(nonce),
-                    "scope":"with_aliases" if aliases else "gmail_send_only"})
-        return {"ok":True,"authorization_url":build_authorization_url(cid,redirect,nonce,aliases),
-                "permissions":"gmail.send + email" + (" + gmail.settings.basic" if aliases else ""),
+                    "scope":("with_aliases," if aliases else "")+("with_replies" if replies else "gmail_send_only")})
+        return {"ok":True,"authorization_url":build_authorization_url(cid,redirect,nonce,aliases,replies),
+                "permissions":"gmail.send + email" + (" + gmail.settings.basic" if aliases else "") + (" + gmail.readonly" if replies else ""),
                 "note":"Connecting a Gmail account does not approve or send any campaign."}
 
     @router.get("/callback")
@@ -212,6 +217,11 @@ def install_gmail_connection_api(app:FastAPI,engine,authenticate):
             access=token.get("access_token") or ""
             if not access:return finish("provider_error")
             profile=await fetch_google_profile(access)
+            # Ensure the OAuth callback cannot gain a sensitive scope that was
+            # not explicitly requested on the authenticated connection screen.
+            scope_type=str(row["requested_scope"] or "")
+            if ALIAS_SCOPE in granted and "with_aliases" not in scope_type:return finish("unexpected_scope")
+            if READ_SCOPE in granted and "with_replies" not in scope_type:return finish("unexpected_scope")
             alias_access=ALIAS_SCOPE in granted
             alias_data=await fetch_google_aliases(access) if alias_access else {}
             primary=profile["email"]
@@ -286,6 +296,11 @@ def install_gmail_connection_api(app:FastAPI,engine,authenticate):
             db.execute(text("""UPDATE public.ld_campaigns SET status='paused',updated_at=now()
                  WHERE sender_identity_id IN (SELECT id FROM public.ld_gmail_sender_identities
                  WHERE connection_id=:id) AND status IN ('draft','active')"""),{"id":connection_id})
+            db.execute(text("""INSERT INTO public.ld_gmail_reply_sync(connection_id,status,last_error_code)
+                VALUES(:id,'disconnected','oauth_connection_revoked')
+                ON CONFLICT(connection_id) DO UPDATE SET status='disconnected',
+                last_success_at=NULL,last_error_code='oauth_connection_revoked',updated_at=now()"""),
+                {"id":connection_id})
             db.execute(text("""UPDATE public.ld_campaign_queue SET status='held',updated_at=now(),
                  failure_code='sender_disconnected' WHERE sender_identity_id IN
                  (SELECT id FROM public.ld_gmail_sender_identities WHERE connection_id=:id)
