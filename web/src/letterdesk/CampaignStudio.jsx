@@ -18,6 +18,7 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
   const [newName,setNewName]=useState('')
   const [senderId,setSenderId]=useState('')
   const [aliasAccess,setAliasAccess]=useState(false)
+  const [replyAccess,setReplyAccess]=useState(false)
   const [dailyLimit,setDailyLimit]=useState(10)
   const [timezone,setTimezone]=useState('Africa/Lagos')
   const [selectedCampaign,setSelectedCampaign]=useState('')
@@ -69,7 +70,7 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
   async function connect(){
     setWorking('connect');setError('');setNotice('')
     try{
-      const r=await post('/api/v2/letterdesk/gmail/connect',{requestAliasVerification:aliasAccess})
+      const r=await post('/api/v2/letterdesk/gmail/connect',{requestAliasVerification:aliasAccess,requestReplyMonitoring:replyAccess})
       if(!r.authorization_url?.startsWith('https://accounts.google.com/'))throw new Error('Invalid Google authorization URL')
       window.location.assign(r.authorization_url)
     }catch(e){setError(e.message||'Cannot start Google connection');setWorking('')}
@@ -174,11 +175,14 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
           <p>Add different Google accounts for different service workspaces. Only Google's accepted Send as identities qualify as verified.</p>
           <label className="ld-campaign-checkbox"><input type="checkbox" checked={aliasAccess} onChange={e=>setAliasAccess(e.target.checked)}/>
             <span>Request verified Send as aliases from Gmail settings<br/><small>Requires Google's restricted gmail.settings.basic scope; use only after app verification.</small></span></label>
+          <label className="ld-campaign-checkbox"><input type="checkbox" checked={replyAccess} onChange={e=>setReplyAccess(e.target.checked)}/>
+            <span>Request permission to monitor replies to messages sent through Letter Desk<br/>
+              <small>Uses restricted Gmail read-only access. When enabled, Letter Desk reads only known sent threads; Google's separate approval may be required.</small></span></label>
           <button className="ld-campaign-primary" type="button" onClick={connect} disabled={!oauthEnabled||Boolean(working)}>
             {working==='connect'?'Opening Google…':'＋ Connect Gmail account'}</button>
           {!oauthEnabled&&<p className="ld-campaign-caution">Google account connection is locked in staging until OAuth configuration and security review pass.</p>}
           {connections.length===0?<p className="ld-campaign-muted">No Gmail accounts connected to this staging team.</p>:connections.map(c=><div className="ld-campaign-account" key={c.id}>
-            <div><strong>{c.email}</strong><small>{c.status} · {fmt(c.verified_senders)} verified sender identities · {c.alias_access?'Alias verification granted':'Primary address only'}</small></div>
+            <div><strong>{c.email}</strong><small>{c.status} · {fmt(c.verified_senders)} verified sender identities · {c.alias_access?'Alias verification granted':'Primary address only'} · {c.reply_access?'Reply monitoring authorized':'No reply-reading permission'}</small></div>
             <div><button onClick={()=>seeIdentities(c.id)} type="button">View addresses</button>
             {c.owner_is_you&&c.status==='connected'&&<button onClick={()=>disconnect(c.id)} type="button">Disconnect</button>}</div>
             {(identities[c.id]||[]).map(identity=><div key={identity.id} className="ld-campaign-identity">
