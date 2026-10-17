@@ -3689,7 +3689,11 @@ async def connection_startup():
     global _http_client
     # Staging is read-only: never run background work or email outreach on a data snapshot.
     if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true", "1", "yes"}:
-        print("LETTERDESK_STAGING_ISOLATED true; all Scout background workers disabled")
+        print("LETTERDESK_STAGING_ISOLATED true; legacy Scout, Telegram and email workers disabled")
+        if os.getenv("LETTERDESK_SCOUT_WRITE_ENABLED", "false").strip().lower() in {"true", "1", "yes"}:
+            from letterdesk_scout_worker import letterdesk_discovery_worker
+            app.state.ld_scout_worker = asyncio.create_task(letterdesk_discovery_worker(legacy.engine))
+            print("LETTERDESK Phase 3 discovery-only worker started (no email)")
         return
     init_connection_db()
     if _http_client is None:
@@ -3737,7 +3741,7 @@ async def connection_startup():
 @app.on_event("shutdown")
 async def connection_shutdown():
     global _http_client
-    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker"):
+    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker","ld_scout_worker"):
         task = getattr(app.state, task_name, None)
         if task:
             task.cancel()
