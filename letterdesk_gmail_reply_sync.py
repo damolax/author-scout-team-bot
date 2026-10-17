@@ -113,10 +113,10 @@ def eligible_connections(engine,limit=5):
         rows=db.execute(text("""SELECT c.id,c.team_id,c.primary_email,c.refresh_token_encrypted,
              c.scopes FROM public.ld_gmail_connections c
              WHERE c.status='connected' AND
-             EXISTS(SELECT 1 FROM public.ld_campaign_queue q
-                 JOIN public.ld_gmail_sender_identities s ON q.sender_identity_id=s.id
-                 WHERE s.connection_id=c.id AND q.status='sent'
-                   AND q.provider_thread_id IS NOT NULL)
+             EXISTS(SELECT 1 FROM public.ld_gmail_sender_identities s
+                 JOIN public.ld_campaigns cam ON cam.sender_identity_id=s.id
+                 WHERE s.connection_id=c.id AND cam.status IN ('draft','active'))
+             AND c.scopes @> ARRAY['https://www.googleapis.com/auth/gmail.readonly']::text[]
              ORDER BY c.updated_at ASC LIMIT :limit"""),{"limit":limit}).mappings().all()
     return [dict(r) for r in rows]
 
