@@ -51,6 +51,28 @@ class StagingIsolationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("origin", response.text.lower())
 
+    def test_flow_simulation_requires_a_logged_in_team(self):
+        response=self.client.post(
+            "/api/v2/letterdesk/services/author/flows/validate",
+            json={"serviceKey":"author","nodes":[],"edges":[]}
+        )
+        self.assertEqual(response.status_code,401)
+
+    def test_flow_saving_is_blocked_by_default_in_preview(self):
+        response=self.client.post(
+            "/api/v2/letterdesk/services/author/flows",
+            json={"name":"Sneaky writer","document":{}}
+        )
+        self.assertEqual(response.status_code,403)
+        self.assertIn("read-only",response.text.lower())
+
+    def test_flow_archival_and_updates_are_blocked_by_default(self):
+        target="/api/v2/letterdesk/services/author/flows/00000000-0000-0000-0000-000000000001"
+        for method,url in [("PUT",target),("POST",target+"/archive")]:
+            with self.subTest(method=method):
+                response=self.client.request(method,url,json={})
+                self.assertEqual(response.status_code,403)
+
     def test_sending_and_mutations_blocked_even_with_invalid_credentials(self):
         cases = [
             ("POST", "/api/v1/messages/1/send"),
