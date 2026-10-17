@@ -81,7 +81,9 @@ def save_confirmed_import(engine,team,service,filename,sha,parsed,rows,summary):
              key text,evidence text,details jsonb)
          )
          INSERT INTO public.ld_opportunities(workspace_id,lead_id,status,evidence_summary,service_details)
-         SELECT :ws,l.id,'research_needed',NULLIF(src.evidence,''),src.details
+         SELECT :ws,l.id,'research_needed',NULLIF(src.evidence,''),
+              COALESCE(src.details,'{}'::jsonb) ||
+                jsonb_build_object('_letterdesk_import_batch',:batch)
          FROM src JOIN public.ld_leads l ON l.team_id=:team AND l.dedupe_key=src.key
          ON CONFLICT(workspace_id,lead_id) DO NOTHING"""),{
           "input":json.dumps(packed),"ws":workspace,"team":team
@@ -101,7 +103,7 @@ def save_confirmed_import(engine,team,service,filename,sha,parsed,rows,summary):
         WHERE src.disposition='created' AND src.email IS NOT NULL
           AND COALESCE(src.body,'')<>'' AND NOT EXISTS(
             SELECT 1 FROM public.ld_conversations prior WHERE prior.opportunity_id=o.id)"""),
-            {"input":json.dumps(packed),"ws":workspace,"team":team})
+            {"input":json.dumps(packed),"ws":workspace,"team":team,"batch":batch})
 
         db.execute(text("""WITH src AS (
           SELECT * FROM jsonb_to_recordset(CAST(:input AS jsonb))
