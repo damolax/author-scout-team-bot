@@ -30,7 +30,7 @@ class DiscoveryTests(unittest.TestCase):
             "http://127.0.0.1", "http://10.0.0.1", "http://[::1]",
             "http://localhost", "http://service.internal",
             "http://google.com/search?q=abc", "http://example.org:8080",
-            "file:///etc/passwd", "ftp://example.org", "https://user:secret@example.org",
+            "file:///etc/passwd", "ftp://example.org", "https://user:secret@samplecompany.test",
         ]
         for url in urls:
             with self.subTest(url=url):
@@ -45,7 +45,7 @@ class DiscoveryTests(unittest.TestCase):
         a=website_identity("https://publisher.example.org","alice@example.org","Alice Writer","author")
         b=website_identity("https://publisher.example.org","bob@example.org","Bob Writer","author")
         self.assertNotEqual(a,b)
-        self.assertEqual(website_identity("https://shop.example.org","hello@example.org","A","shopify"),
+        self.assertEqual(website_identity("https://shop.example.org","hello@samplecompany.test","A","shopify"),
                          website_identity("https://shop.example.org","sales@example.org","B","shopify"))
 
     @patch("letterdesk_discovery._robots_allowed",return_value=True)
@@ -55,15 +55,15 @@ class DiscoveryTests(unittest.TestCase):
         dns.return_value=[(2,1,6,"",("93.184.216.34",443))]
         html="""<html><head><title>Example Business</title></head><body>
             <h1>Example Business</h1><p>Public contact information</p>
-            <script>var hidden='secret@example.org'</script>
-            <a href="mailto:hello@example.org?subject=hello">Contact us</a></body></html>"""
+            <script>var hidden='secret@samplecompany.test'</script>
+            <a href="mailto:hello@samplecompany.test?subject=hello">Contact us</a></body></html>"""
         http.return_value=("https://example.org/",html,200)
         result=inspect_website("https://example.org/",max_pages=1)
-        self.assertEqual(result["email_candidates"][0]["email"],"hello@example.org")
+        self.assertEqual(result["email_candidates"][0]["email"],"hello@samplecompany.test")
         self.assertEqual(result["email_candidates"][0]["method"],"explicit_mailto")
         self.assertEqual(result["email_candidates"][0]["verification"],"published_not_verified")
         self.assertEqual(result["email_candidates"][0]["source_url"],"https://example.org/")
-        self.assertFalse(any(e["email"]=="secret@example.org" for e in result["email_candidates"]))
+        self.assertFalse(any(e["email"]=="secret@samplecompany.test" for e in result["email_candidates"]))
 
     def test_places_adapter_requires_auth_key(self):
         with self.assertRaises(ValueError):
