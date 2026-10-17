@@ -46,3 +46,16 @@
 .ld-import-history>p{font-size:11px;color:#879a8a}
 @media(max-width:860px){.ld-import-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.ld-import-top{flex-direction:column;align-items:flex-start}}
 @media(max-width:570px){.ld-import-top{padding:18px}.ld-import-content{padding:14px}.ld-import-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.ld-import-file{align-items:flex-start;flex-direction:column}.ld-import-file input{width:100%}.ld-import-file button{width:100%}}
+
+/* Phase 8: reviewed import undo, never one-click destructive action. */
+.ld-import-undo-trigger{display:inline-block;margin-left:12px;padding:5px 8px;border:1px solid #d8e1d8;border-radius:8px;background:#fff;color:#6b5547;font-weight:700;font-size:10px;cursor:pointer}
+.ld-import-undo-trigger:disabled{opacity:.5}
+.ld-import-undo-panel{margin-top:14px;border:1px solid #ead8c8;background:#fffcf9;border-radius:12px;padding:16px;font-size:12px;line-height:1.6}
+.ld-import-undo-panel>strong{display:block;font-size:13px}
+.ld-import-undo-panel>p{color:#816b57;margin:9px 0}
+.ld-import-undo-panel>label{display:flex;flex-direction:column;gap:7px;max-width:470px;margin:12px 0;font-weight:700}
+.ld-import-undo-panel input{border:1px solid #decab8;border-radius:9px;padding:10px;font-size:12px}
+.ld-import-undo-panel button{margin:7px 9px 0 0;padding:9px 12px;border:1px solid #d5c6ba;background:#fff;border-radius:9px;color:#705247;font-size:11px;font-weight:750;cursor:pointer}
+.ld-import-undo-panel .ld-import-undo-danger{background:#8b3f34;border-color:#8b3f34;color:#fff}
+.ld-import-undo-panel button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:600px){.ld-import-undo-trigger{display:block;margin:8px 0 0}.ld-import-undo-panel{padding:13px}}
