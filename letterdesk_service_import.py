@@ -78,7 +78,10 @@ def public_link(raw):
 def _map_header(header,service):
     idx={norm(label):i for i,label in enumerate(header) if norm(label)}
     columns={}
-    all_aliases={**COMMON,**SERVICES[service]}
+    # Service names take precedence, but generic Name must always work too.
+    all_aliases={key:list(aliases) for key,aliases in COMMON.items()}
+    for key,aliases in SERVICES[service].items():
+        all_aliases[key]=list(aliases)+all_aliases.get(key,[])
     for key,aliases in all_aliases.items():
         value=next((idx[norm(alias)] for alias in aliases if norm(alias) in idx),None)
         if value is not None:columns[key]=value
