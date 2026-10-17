@@ -16,7 +16,7 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
       - name: Compile Python files
-        run: python -m py_compile bot_main.py bot_main_v3.py letterdesk_service_import.py letterdesk_import_plan.py letterdesk_import_commit.py letterdesk_import_api.py letterdesk_flow_engine.py letterdesk_flow_api.py letterdesk_gmail_api.py letterdesk_campaign_api.py letterdesk_campaign_delivery.py letterdesk_reply_rules.py letterdesk_reply_store.py letterdesk_reply_api.py letterdesk_gmail_reply_sync.py
+        run: python -m py_compile bot_main.py bot_main_v3.py letterdesk_service_import.py letterdesk_import_plan.py letterdesk_import_commit.py letterdesk_import_api.py letterdesk_flow_engine.py letterdesk_flow_api.py letterdesk_gmail_api.py letterdesk_campaign_api.py letterdesk_campaign_delivery.py letterdesk_reply_rules.py letterdesk_reply_store.py letterdesk_reply_api.py letterdesk_gmail_reply_sync.py letterdesk_import_undo.py
       - name: Import v3 overlay
         run: python -c "import bot_main_v3; print('Author Scout', bot_main_v3.app.version)"
       - name: Letterdesk import regression
@@ -63,6 +63,8 @@ jobs:
         run: python -m unittest -v tests/test_letterdesk_reply_rules.py
       - name: Letter Desk Phase 7 reply API team and write protection
         run: python -m unittest -v tests/test_letterdesk_reply_api.py
+      - name: Letter Desk Phase 8 import undo, tamper gates and 500-row parsing
+        run: python -m unittest -v tests/test_letterdesk_phase8_reliability.py
 
   web:
     runs-on: ubuntu-latest
@@ -83,5 +85,7 @@ jobs:
           node --test ../tests/test_extension.mjs ../tests/test_extension_worker.mjs
       - name: Letter Desk six-workspace imports and branching safety
         run: node --test src/letterdesk/letterdesk-contracts.test.js
+      - name: Letter Desk Phase 8 persisted sign-in regression
+        run: node --test src/letterdesk/session-policy.test.js
       - name: Build Vite dashboard
         run: npm run build
