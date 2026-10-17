@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { SERVICE_MODES } from './service-modes.js'
 import './service-dashboard.css'
+import ScoutingStudio from './ScoutingStudio.jsx'
 
 const SERVICE_ICONS = Object.freeze({
   author: '✦', automation: '⟲', 'website-design': '▣',
@@ -138,6 +139,8 @@ export default function ServiceDashboard({ active, keyValue, request }) {
           ↓ Download {current.noun} import template
         </button>
       </div>
+
+      <ScoutingStudio key={serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
 
       <div className="ld2-metrics" aria-label="Service performance">
         {[
