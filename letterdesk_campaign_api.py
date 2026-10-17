@@ -111,7 +111,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
             rows=db.execute(text("""SELECT c.id::text,c.name,c.status,
                 c.sender_identity_id::text AS sender_identity_id,
                 s.email AS sender_email,c.max_daily,c.min_interval_seconds,
-                c.send_window_start,c.send_window_end,c.timezone_name,c.created_at::text,
+                c.send_window_start,c.send_window_end,c.timezone_name,c.created_at::text,c.owner_web_account_id,
                 COUNT(q.id) AS queue_total,
                 COUNT(q.id) FILTER(WHERE q.status='approved') AS queue_approved,
                 COUNT(q.id) FILTER(WHERE q.status='sent') AS sent_total
@@ -148,16 +148,16 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
         except (ZoneInfoNotFoundError,ValueError):raise HTTPException(400,"Unknown timezone")
         try:
             with engine.begin() as db:
-                sender=identity(db,sender_id,team)
+                sender=identity(db,sender_id,team,account)
                 if not sender or not sender["enabled"] or sender["verification_status"]!="verified" or sender["connection_status"]!="connected":
                     raise HTTPException(400,"Only enabled Google-verified Gmail identities can be assigned")
                 row=db.execute(text("""INSERT INTO public.ld_campaigns
                    (workspace_id,name,status,sender_identity_id,max_daily,min_interval_seconds,
-                   send_window_start,send_window_end,timezone_name)
-                   VALUES(CAST(:ws AS uuid),:name,'draft',:sender,:daily,:interval,:start,:end,:tz)
+                   send_window_start,send_window_end,timezone_name,owner_web_account_id)
+                   VALUES(CAST(:ws AS uuid),:name,'draft',:sender,:daily,:interval,:start,:end,:tz,:owner)
                    RETURNING id::text"""),{
                        "ws":ws,"name":name,"sender":sender_id,"daily":daily,"interval":interval,
-                       "start":start,"end":end,"tz":tz}).scalar_one()
+                       "start":start,"end":end,"tz":tz,"owner":account}).scalar_one()
         except IntegrityError:raise HTTPException(409,"Campaign name already exists in this service")
         return {"ok":True,"id":row,"status":"draft",
                 "note":"Draft campaign created. No messages can be sent by creating a campaign."}
@@ -191,7 +191,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
             db.execute(text("SELECT pg_advisory_xact_lock(:team)"),{"team":team})
             campaign=db.execute(text("""SELECT c.id,c.sender_identity_id,c.status
                  FROM public.ld_campaigns c WHERE c.id=:id AND c.workspace_id=CAST(:ws AS uuid)
-                 AND c.status='draft' FOR UPDATE"""),{"id":campaign_id,"ws":ws}).mappings().first()
+                 AND c.status='draft' AND c.owner_web_account_id=:owner FOR UPDATE"""),{"id":campaign_id,"ws":ws,"owner":account}).mappings().first()
             if not campaign:raise HTTPException(404,"Draft campaign not found")
             sender=identity(db,campaign["sender_identity_id"],team)
             if not sender or not sender["enabled"] or sender["verification_status"]!="verified" or sender["connection_status"]!="connected":
@@ -244,7 +244,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
                  approved_at=now(),updated_at=now() FROM public.ld_campaigns c
                  WHERE q.id=:qid AND q.campaign_id=c.id AND c.id=:cid
                    AND c.workspace_id=CAST(:ws AS uuid) AND c.status='draft'
-                   AND q.status='pending_review' AND q.approval_account_id=:account
+                   AND c.owner_web_account_id=:account AND q.status='pending_review' AND q.approval_account_id=:account
                    AND NOT EXISTS (SELECT 1 FROM public.ld_suppressions s
                        JOIN public.ld_service_workspaces w ON w.team_id=s.team_id
                        WHERE w.id=c.workspace_id AND s.normalized_email=q.recipient_email)
@@ -260,8 +260,8 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
         with engine.begin() as db:
             changed=db.execute(text("""UPDATE public.ld_campaigns SET status='paused',updated_at=now()
                    WHERE id=:id AND workspace_id=CAST(:ws AS uuid)
-                   AND status IN ('draft','active') RETURNING id"""),{
-                     "id":campaign_id,"ws":ws}).scalar_one_or_none()
+                   AND status IN ('draft','active') AND owner_web_account_id=:account
+                   RETURNING id"""),{"id":campaign_id,"ws":ws,"account":account}).scalar_one_or_none()
             if not changed:raise HTTPException(404,"Campaign not found or already stopped")
             db.execute(text("""UPDATE public.ld_campaign_queue SET status='held',updated_at=now()
                  WHERE campaign_id=:id AND status IN ('pending_review','approved')"""),{
