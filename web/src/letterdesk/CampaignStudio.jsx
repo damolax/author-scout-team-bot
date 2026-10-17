@@ -55,7 +55,7 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
     setIdentities({});setNewName('');setSenderId('');setSelectedCampaign('')
     setEntries([]);setAvailableDrafts([]);setNotice('');setError('')
   },[serviceKey])
-  useEffect(()=>{if(active&&keyValue)refresh()},[active,serviceKey,keyValue])
+  useEffect(()=>{if(active&&keyValue&&open)refresh()},[active,serviceKey,keyValue,open])
 
   useEffect(()=>{
     const params=new URLSearchParams(window.location.search)
