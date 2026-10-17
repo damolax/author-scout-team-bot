@@ -137,8 +137,8 @@ def install_gmail_connection_api(app:FastAPI,engine,authenticate):
     def list_connections(request:Request):
         team,account=context(request)
         with engine.connect() as db:
-            rs=db.execute(text("""SELECT c.id::text AS id,c.primary_email,c.status,c.scopes,
-                    c.created_at::text AS created_at,c.updated_at::text AS updated_at,
+            rs=db.execute(text("""SELECT CAST(c.id AS TEXT) AS id,c.primary_email,c.status,c.scopes,
+                    CAST(c.created_at AS TEXT) AS created_at,CAST(c.updated_at AS TEXT) AS updated_at,
                     c.web_account_id,
                     (SELECT count(*) FROM public.ld_gmail_sender_identities s
                      WHERE s.connection_id=c.id AND s.verification_status='verified') AS verified_senders
@@ -247,7 +247,7 @@ def install_gmail_connection_api(app:FastAPI,engine,authenticate):
     def sender_identities(request:Request,connection_id:__import__("uuid").UUID):
         team,account=context(request)
         with engine.connect() as db:
-            rs=db.execute(text("""SELECT s.id::text AS id,s.email,s.display_name,
+            rs=db.execute(text("""SELECT CAST(s.id AS TEXT) AS id,s.email,s.display_name,
                  s.verification_status,s.verification_source,s.enabled
                  FROM public.ld_gmail_sender_identities s
                  JOIN public.ld_gmail_connections c ON c.id=s.connection_id
