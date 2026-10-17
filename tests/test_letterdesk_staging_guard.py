@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 os.environ["LETTERDESK_STAGING_ISOLATED"] = "true"
 os.environ["LETTERDESK_V2_ENABLED"] = "true"
 os.environ["SOURCE_INDEX_ENABLED"] = "false"
+os.environ["NEON_AUTH_URL"] = "https://ep-test.neonauth.c-7.us-east-2.aws.neon.tech/my_db/auth"
+os.environ["LETTERDESK_STAGING_FRONTEND_ORIGIN"] = "https://letterdesk-v2-ui-preview.onrender.com"
 from bot_main_v3 import app
 
 
