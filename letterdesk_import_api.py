@@ -13,6 +13,7 @@ from sqlalchemy import text
 from letterdesk_service_import import MAX_BYTES, SERVICES, parse_service_upload, import_headers
 from letterdesk_import_plan import plan, file_token, verify_token, preview_row
 from letterdesk_import_commit import save_confirmed_import
+from letterdesk_import_undo import preview as preview_undo, execute as execute_undo, undo_enabled
 
 def install_import_api(app:FastAPI,engine,authenticate):
     router=APIRouter(prefix="/api/v2/letterdesk",tags=["Letter Desk file imports"])
@@ -102,5 +103,26 @@ def install_import_api(app:FastAPI,engine,authenticate):
         batch=save_confirmed_import(engine,team,service,filename,sha,parsed,rows,summary)
         return {"ok":True,"batch_id":batch,"summary":summary,
                 "note":"Leads imported; all new messages remain unsent drafts requiring review."}
+
+    @router.get("/services/{service}/imports/{batch_id}/undo-preview")
+    def undo_preview(request:Request,service:str,batch_id:__import__("uuid").UUID):
+        team=team_for(request,service)
+        data=preview_undo(engine,team,service,batch_id)
+        data["write_enabled"]=undo_enabled()
+        return data
+
+    @router.post("/services/{service}/imports/{batch_id}/undo")
+    async def undo_import(request:Request,service:str,batch_id:__import__("uuid").UUID):
+        team=team_for(request,service)
+        if not undo_enabled():
+            raise HTTPException(403,"Import undo is disabled in protected staging")
+        identity=authenticate(request)
+        account=int(identity.get("account_id") or 0)
+        if account<1:raise HTTPException(403,"Signed-in account required")
+        data=await request.json()
+        if not isinstance(data,dict):
+            raise HTTPException(400,"Invalid undo confirmation")
+        return execute_undo(engine,team,service,batch_id,account,
+            str(data.get("filename") or ""),str(data.get("confirmation_token") or ""))
 
     app.include_router(router)
