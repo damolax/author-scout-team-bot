@@ -91,7 +91,7 @@ export default function FlowStudio({serviceKey,keyValue,request,active}){
     setOpen(false);setWriteEnabled(false)
   },[serviceKey])
   useEffect(()=>{
-    if(!active||!keyValue)return
+    if(!active||!keyValue||!open)return
     let cancel=false
     async function initial(){
       try{
@@ -105,7 +105,7 @@ export default function FlowStudio({serviceKey,keyValue,request,active}){
     }
     initial()
     return()=>{cancel=true}
-  },[active,serviceKey,keyValue])
+  },[active,serviceKey,keyValue,open])
 
   const positions=useMemo(()=>graphLayout(doc),[doc])
   const selectedNode=doc?.nodes?.find(n=>n.code===selected)
