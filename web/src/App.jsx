@@ -1179,8 +1179,8 @@ function Connections({ keyValue, active }) {
 }
 
 const NAV = [
-  ['dashboard','Overview','⌂'],
   ...(ENABLE_LETTERDESK_V2 ? [['services','Service Workspaces','◈']] : []),
+  ['dashboard','Overview','⌂'],
   ['research','Scout','⌕'],
   ['authors','Authors','A'],
   ['messages','Letterdesk','✉'],
@@ -1202,7 +1202,7 @@ function AppCore() {
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
   const [loginStatus, setLoginStatus] = useState('')
-  const [tab, setTab] = useState(() => { const requested = new URLSearchParams(window.location.search).get('tab'); return requested === 'messages' ? 'messages' : ENABLE_LETTERDESK_V2 && requested === 'services' ? 'services' : 'dashboard' })
+  const [tab, setTab] = useState(() => { const requested = new URLSearchParams(window.location.search).get('tab'); return requested === 'messages' ? 'messages' : ENABLE_LETTERDESK_V2 && requested !== 'dashboard' ? 'services' : 'dashboard' })
 
   const verify = useCallback(async (rawKey) => {
     const epoch=authEpoch.current
@@ -1480,7 +1480,7 @@ function AppCore() {
     <div className="app-frame">
       <div className="app-shell">
         <header className="topbar">
-          <button className="logo-pill" onClick={() => setTab('dashboard')}>{ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'}</button>
+          <button className="logo-pill" onClick={() => setTab(ENABLE_LETTERDESK_V2 ? 'services' : 'dashboard')}>{ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'}</button>
 
           <nav className="topnav" aria-label="Primary navigation">
             {NAV.map(([id,label]) => (
