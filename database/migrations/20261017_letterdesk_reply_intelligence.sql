@@ -63,3 +63,11 @@ CREATE TABLE IF NOT EXISTS public.ld_gmail_reply_sync (
 );
 
 CREATE INDEX IF NOT EXISTS ld_queue_awaiting_reply_idx ON public.ld_campaign_queue(sender_identity_id,provider_thread_id,sent_at) WHERE status='sent' AND provider_thread_id IS NOT NULL;
+
+-- Fair round-robin thread checks prevent older active conversations starving.
+CREATE TABLE IF NOT EXISTS public.ld_gmail_thread_watch (
+ queue_id uuid PRIMARY KEY REFERENCES public.ld_campaign_queue(id),
+ last_checked_at timestamptz,
+ last_error_code text,
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
