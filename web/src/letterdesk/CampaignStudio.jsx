@@ -23,6 +23,7 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
   const [selectedCampaign,setSelectedCampaign]=useState('')
   const [entries,setEntries]=useState([])
   const [draftId,setDraftId]=useState('')
+  const [availableDrafts,setAvailableDrafts]=useState([])
   const [recipient,setRecipient]=useState('')
   const [basis,setBasis]=useState('explicit_opt_in')
   const [basisEvidence,setBasisEvidence]=useState('')
@@ -43,13 +44,15 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
       setConnections(conn.connections||[]);setOauthEnabled(Boolean(conn.oauth_enabled))
       setSenders(available.senders||[]);setWritesEnabled(Boolean(list.writes_enabled))
       setCampaigns(list.campaigns||[])
+      const draftList=await get(root+'/campaigns/eligible-drafts')
+      setAvailableDrafts(draftList.drafts||[])
       setError('')
     }catch(e){setError(e.message||'Could not load Gmail or campaign settings')}
   }
   useEffect(()=>{
     setOpen(false);setConnections([]);setSenders([]);setCampaigns([])
     setIdentities({});setNewName('');setSenderId('');setSelectedCampaign('')
-    setEntries([]);setNotice('');setError('')
+    setEntries([]);setAvailableDrafts([]);setNotice('');setError('')
   },[serviceKey])
   useEffect(()=>{if(active&&keyValue)refresh()},[active,serviceKey,keyValue])
 
@@ -126,6 +129,7 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
       setDraftId('');setRecipient('');setBasisEvidence('')
       setNotice('Message added for explicit review. It has NOT been sent.')
       await loadQueue(selectedCampaign)
+      await refresh()
     }catch(e){setError(e.message)}
     finally{setWorking('')}
   }
@@ -211,8 +215,15 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
         </select></label>
         {selectedCampaign&&<>
           <div className="ld-campaign-queue-options">
-            <label>Existing draft message ID<input placeholder="UUID from a reviewed draft" value={draftId} onChange={e=>setDraftId(e.target.value)}/></label>
-            <label>Recipient email<input type="email" placeholder="contact@example.com" value={recipient} onChange={e=>setRecipient(e.target.value)}/></label>
+            <label>Choose a prepared, unsent message<select value={draftId} onChange={e=>{
+              const id=e.target.value
+              const item=availableDrafts.find(x=>x.id===id)
+              setDraftId(id);setRecipient(item?.recipient_email||'')
+            }}>
+              <option value="">Select a reviewed draft</option>
+              {availableDrafts.map(d=><option key={d.id} value={d.id}>{d.prospect_name} — {d.recipient_email} — {(d.subject||'No subject').slice(0,55)}</option>)}
+            </select></label>
+            <label>Recipient email<input type="email" value={recipient} readOnly aria-label="Selected draft recipient" placeholder="Choose a draft first"/></label>
             <label>Contact basis<select value={basis} onChange={e=>setBasis(e.target.value)}>
               {BASES.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
             <label className="ld-campaign-evidence">Documented permission / relationship / business relevance<textarea
