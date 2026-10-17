@@ -27,6 +27,30 @@ class StagingIsolationTests(unittest.TestCase):
         response = self.client.get("/api/v2/letterdesk/services")
         self.assertEqual(response.status_code, 401)
 
+    def test_email_login_route_cors_preflight_is_allowed(self):
+        response = self.client.options(
+            "/api/v2/letterdesk/auth/email",
+            headers={
+                "Origin": "https://letterdesk-v2-ui-preview.onrender.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            }
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.headers.get("access-control-allow-origin"),
+            "*"
+        )
+
+    def test_auth_endpoint_exists_and_rejects_foreign_origin(self):
+        response = self.client.post(
+            "/api/v2/letterdesk/auth/email",
+            headers={"Origin": "https://untrusted.example"},
+            json={"email": "qa@example.test", "password": "irrelevant123"}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("origin", response.text.lower())
+
     def test_sending_and_mutations_blocked_even_with_invalid_credentials(self):
         cases = [
             ("POST", "/api/v1/messages/1/send"),
