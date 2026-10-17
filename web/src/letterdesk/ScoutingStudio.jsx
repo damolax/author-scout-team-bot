@@ -47,6 +47,11 @@ export default function ScoutingStudio({serviceKey,keyValue,request,active}) {
     }catch(e){setError(e.message||'Jobs unavailable')}
   }
   useEffect(()=>{if(active&&keyValue)loadJobs()},[active,keyValue,serviceKey])
+  useEffect(()=>{
+    if(!active||!keyValue||!canRun||!jobs.some(x=>x.status==='running'||x.status==='queued'))return undefined
+    const timer=setInterval(()=>loadJobs(),7000)
+    return ()=>clearInterval(timer)
+  },[active,keyValue,canRun,serviceKey,jobs.map(x=>x.status).join(',')])
 
   async function createJob(){
     if(!canRun)return
@@ -67,7 +72,7 @@ export default function ScoutingStudio({serviceKey,keyValue,request,active}) {
     setBusy(id);setMessage('');setError('')
     try{
       const r=await request('/api/v2/letterdesk/services/'+serviceKey+'/scout/jobs/'+encodeURIComponent(id)+'/run',keyValue,{method:'POST'})
-      setMessage('Research complete: '+(r.created||0)+' new leads, '+(r.linked||0)+' linked, '+(r.rejected||0)+' skipped. No messages sent.')
+      setMessage('Job '+(r.status||'queued')+'. The discovery worker processes it separately; no messages will be sent.')
       await loadJobs();await getResults(id)
     }catch(e){setError(e.message||'Job failed');await loadJobs()}
     finally{setBusy('')}
