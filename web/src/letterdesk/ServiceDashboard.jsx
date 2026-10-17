@@ -4,6 +4,7 @@ import './service-dashboard.css'
 import ScoutingStudio from './ScoutingStudio.jsx'
 import ImportStudio from './ImportStudio.jsx'
 import FlowStudio from './FlowStudio.jsx'
+import CampaignStudio from './CampaignStudio.jsx'
 
 const SERVICE_ICONS = Object.freeze({
   author: '✦', automation: '⟲', 'website-design': '▣',
@@ -145,6 +146,7 @@ export default function ServiceDashboard({ active, keyValue, request }) {
       <ScoutingStudio key={serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
       <ImportStudio key={'import-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} active={active} onImported={()=>setReload(n=>n+1)} />
       <FlowStudio key={'flow-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
+      <CampaignStudio key={'campaign-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
 
       <div className="ld2-metrics" aria-label="Service performance">
         {[
