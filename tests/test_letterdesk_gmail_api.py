@@ -56,6 +56,8 @@ class GmailConnectionTests(unittest.TestCase):
                  id TEXT,team_id INTEGER,web_account_id INTEGER,google_subject TEXT,
                  primary_email TEXT,refresh_token_encrypted TEXT,scopes TEXT,
                  status TEXT,verified_at TEXT,created_at TEXT,updated_at TEXT)""")
+            c.exec_driver_sql("""CREATE TABLE public.ld_gmail_sender_identities(
+                id TEXT,connection_id TEXT,verification_status TEXT,email TEXT)""")
         def auth(req):
             key=req.headers.get("x-author-scout-key")
             if key=="team1":return {"team_id":1,"account_id":11}
