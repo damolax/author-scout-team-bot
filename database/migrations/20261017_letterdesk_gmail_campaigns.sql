@@ -94,3 +94,6 @@ CREATE INDEX IF NOT EXISTS ld_campaign_queue_due_idx ON public.ld_campaign_queue
 CREATE INDEX IF NOT EXISTS ld_gmail_connections_owner_idx ON public.ld_gmail_connections(team_id,web_account_id);
 
 CREATE INDEX IF NOT EXISTS ld_campaign_sender_identity_idx ON public.ld_campaigns(sender_identity_id);
+
+-- Campaign ownership prevents teammates from sending from another account without authorization.
+ALTER TABLE public.ld_campaigns ADD COLUMN IF NOT EXISTS owner_web_account_id integer REFERENCES public.web_accounts(id);
