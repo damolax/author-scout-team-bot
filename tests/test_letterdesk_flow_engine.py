@@ -74,6 +74,16 @@ class Phase5FlowTests(unittest.TestCase):
                                   {"id":"A","subject":"","body":""}]
         self.assertTrue(any("repeated variant ID" in s for s in validate_flow(f,"author")))
 
+    def test_terminal_label_never_becomes_sendable_message(self):
+        f=starter_flow("author")
+        f["edges"].append({"from":"Message0201Yes","outcome":"no","to":"Message0101No",
+                          "action":"draft_for_review"})
+        self.assertTrue(any("Terminal label cannot" in x for x in validate_flow(f,"author")))
+        f=starter_flow("author")
+        f["edges"].append({"from":"Message0101No","outcome":"yes","to":"Message0201Yes",
+                          "action":"draft_for_review"})
+        self.assertTrue(any("Completed message cannot" in x for x in validate_flow(f,"author")))
+
     def test_cannot_silently_move_flow_to_another_service(self):
         f=starter_flow("author")
         self.assertIn("another service", " ".join(validate_flow(f,"shopify")))
