@@ -51,6 +51,14 @@ class StagingIsolationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("origin", response.text.lower())
 
+    def test_import_undo_mutation_is_blocked_in_protected_staging(self):
+        url="/api/v2/letterdesk/services/author/imports/00000000-0000-0000-0000-000000000001/undo"
+        response=self.client.post(url,json={
+            "filename":"test.csv","confirmation_token":"invalid"
+        })
+        self.assertEqual(response.status_code,403)
+        self.assertIn("read-only",response.text.lower())
+
     def test_flow_simulation_requires_a_logged_in_team(self):
         response=self.client.post(
             "/api/v2/letterdesk/services/author/flows/validate",
