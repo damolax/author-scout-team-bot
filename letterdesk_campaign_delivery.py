@@ -144,7 +144,10 @@ def claim_next(engine):
             total=db.execute(text("""SELECT count(*) FROM public.ld_campaign_queue q
                 JOIN public.ld_campaigns c ON q.campaign_id=c.id
                 JOIN public.ld_service_workspaces w ON w.id=c.workspace_id
-                WHERE w.team_id=:team AND q.status='sent' AND q.sent_at>=CURRENT_DATE"""),{
+                WHERE w.team_id=:team AND (
+                    (q.status='sent' AND q.sent_at>=CURRENT_DATE) OR
+                    (q.status IN ('sending','uncertain') AND q.claimed_at>=CURRENT_DATE))
+                    """),{
                     "team":row["team_id"]}).scalar_one()
             if total>=MAX_TEAM_SENDS_PER_DAY:continue
             # Mark irreversible claim before network request. Never claim 'sending'
@@ -152,6 +155,16 @@ def claim_next(engine):
             db.execute(text("""UPDATE public.ld_campaign_queue
                 SET status='sending',claimed_at=now(),updated_at=now()
                 WHERE id=:id AND status='approved'"""),{"id":row["id"]})
+            # Reserve today's capacity and cooldown before attempting delivery,
+            # so parallel workers cannot bypass sender limits.
+            db.execute(text("""INSERT INTO public.ld_campaign_sender_health
+                (sender_identity_id,last_sent_at,sent_today,sent_day)
+                VALUES(:sender,now(),1,CURRENT_DATE)
+                ON CONFLICT(sender_identity_id) DO UPDATE SET
+                  last_sent_at=now(),
+                  sent_today=CASE WHEN public.ld_campaign_sender_health.sent_day=CURRENT_DATE
+                    THEN public.ld_campaign_sender_health.sent_today+1 ELSE 1 END,
+                  sent_day=CURRENT_DATE"""),{"sender":row["sender_identity_id"]})
             return row
     return None
 
@@ -188,14 +201,6 @@ async def deliver_one(engine):
             SET status='awaiting_reply',message_count=message_count+1,updated_at=now()
             WHERE id=:id AND status NOT IN ('stopped','lost')"""),{
                 "id":row["conversation_id"]})
-        db.execute(text("""INSERT INTO public.ld_campaign_sender_health
-             (sender_identity_id,last_sent_at,sent_today,sent_day)
-             VALUES(:sender,now(),1,CURRENT_DATE)
-             ON CONFLICT(sender_identity_id) DO UPDATE SET
-                last_sent_at=now(),
-                sent_today=CASE WHEN public.ld_campaign_sender_health.sent_day=CURRENT_DATE
-                    THEN public.ld_campaign_sender_health.sent_today+1 ELSE 1 END,
-                sent_day=CURRENT_DATE"""),{"sender":row["sender_identity_id"]})
     return {"status":"sent"}
 
 def quarantine_stale_attempts(engine):
