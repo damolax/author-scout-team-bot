@@ -16,7 +16,7 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
       - name: Compile Python files
-        run: python -m py_compile bot_main.py bot_main_v3.py
+        run: python -m py_compile bot_main.py bot_main_v3.py letterdesk_service_import.py letterdesk_import_plan.py letterdesk_import_commit.py letterdesk_import_api.py
       - name: Import v3 overlay
         run: python -c "import bot_main_v3; print('Author Scout', bot_main_v3.app.version)"
       - name: Letterdesk import regression
@@ -45,6 +45,8 @@ jobs:
         run: python -m unittest -v tests/test_letterdesk_discovery.py
       - name: Letter Desk Phase 3 team and writer guard
         run: python -m unittest -v tests/test_letterdesk_scout_api.py
+      - name: Letter Desk Phase 4 workbook parser and approval safety
+        run: python -m unittest -v tests/test_letterdesk_service_import.py
 
   web:
     runs-on: ubuntu-latest
