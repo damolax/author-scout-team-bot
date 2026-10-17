@@ -48,7 +48,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
         if team<1 or account<1:raise HTTPException(403,"Valid signed-in workspace required")
         if service not in SERVICE_KEYS:raise HTTPException(404,"Unknown service")
         with engine.connect() as db:
-            ws=db.execute(text("""SELECT id::text FROM public.ld_service_workspaces
+            ws=db.execute(text("""SELECT CAST(id AS TEXT) FROM public.ld_service_workspaces
                WHERE team_id=:team AND service_key=:service AND is_active=true"""),
                {"team":team,"service":service}).scalar_one_or_none()
         if not ws:raise HTTPException(404,"Service workspace unavailable")
@@ -64,8 +64,8 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
         conditions=" AND c.web_account_id=:owner" if owner is not None else ""
         p={"id":identity_id,"team":team}
         if owner is not None:p["owner"]=owner
-        value=db.execute(text("""SELECT s.id::text AS id,s.email,s.enabled,
-           s.verification_status,c.id::text AS connection_id,c.status AS connection_status,
+        value=db.execute(text("""SELECT s.CAST(id AS TEXT) AS id,s.email,s.enabled,
+           s.verification_status,c.CAST(id AS TEXT) AS connection_id,c.status AS connection_status,
            c.web_account_id
            FROM public.ld_gmail_sender_identities s
            JOIN public.ld_gmail_connections c ON c.id=s.connection_id
@@ -76,7 +76,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
     def senders(request:Request,service:str):
         team,account,ws=auth_workspace(request,service)
         with engine.connect() as db:
-            rows=db.execute(text("""SELECT s.id::text AS id,s.email,s.enabled,
+            rows=db.execute(text("""SELECT s.CAST(id AS TEXT) AS id,s.email,s.enabled,
                 s.verification_status,c.primary_email AS google_account,c.web_account_id,
                 EXISTS(SELECT 1 FROM public.ld_campaigns camp
                        WHERE camp.sender_identity_id=s.id AND camp.workspace_id=CAST(:ws AS uuid))
@@ -108,10 +108,10 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
     def list_campaigns(request:Request,service:str):
         team,account,ws=auth_workspace(request,service)
         with engine.connect() as db:
-            rows=db.execute(text("""SELECT c.id::text,c.name,c.status,
-                c.sender_identity_id::text AS sender_identity_id,
+            rows=db.execute(text("""SELECT c.CAST(id AS TEXT),c.name,c.status,
+                c.sender_identity_CAST(id AS TEXT) AS sender_identity_id,
                 s.email AS sender_email,c.max_daily,c.min_interval_seconds,
-                c.send_window_start,c.send_window_end,c.timezone_name,c.created_at::text,c.owner_web_account_id,
+                c.send_window_start,c.send_window_end,c.timezone_name,CAST(c.created_at AS TEXT),c.owner_web_account_id,
                 COUNT(q.id) AS queue_total,
                 COUNT(q.id) FILTER(WHERE q.status='approved') AS queue_approved,
                 COUNT(q.id) FILTER(WHERE q.status='sent') AS sent_total
@@ -155,7 +155,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
                    (workspace_id,name,status,sender_identity_id,max_daily,min_interval_seconds,
                    send_window_start,send_window_end,timezone_name,owner_web_account_id)
                    VALUES(CAST(:ws AS uuid),:name,'draft',:sender,:daily,:interval,:start,:end,:tz,:owner)
-                   RETURNING id::text"""),{
+                   RETURNING CAST(id AS TEXT)"""),{
                        "ws":ws,"name":name,"sender":sender_id,"daily":daily,"interval":interval,
                        "start":start,"end":end,"tz":tz,"owner":account}).scalar_one()
         except IntegrityError:raise HTTPException(409,"Campaign name already exists in this service")
@@ -170,9 +170,9 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
                   WHERE id=:campaign AND workspace_id=CAST(:ws AS uuid)"""),{
                     "campaign":campaign_id,"ws":ws}).scalar_one_or_none()
             if not valid:raise HTTPException(404,"Campaign not found")
-            rows=db.execute(text("""SELECT q.id::text,q.message_record_id::text,q.recipient_email,
-                 q.permission_basis,q.status,q.scheduled_at::text,q.approved_at::text,
-                 q.sent_at::text,q.failure_code
+            rows=db.execute(text("""SELECT q.CAST(id AS TEXT),q.message_record_CAST(id AS TEXT),q.recipient_email,
+                 q.permission_basis,q.status,CAST(q.scheduled_at AS TEXT),CAST(q.approved_at AS TEXT),
+                 CAST(q.sent_at AS TEXT),q.failure_code
                  FROM public.ld_campaign_queue q WHERE q.campaign_id=:id
                  ORDER BY q.created_at DESC LIMIT 200"""),{"id":campaign_id}).mappings().all()
         return {"ok":True,"queue":[dict(r) for r in rows]}
@@ -228,7 +228,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
                  campaign_id,message_record_id,sender_identity_id,recipient_email,
                  permission_basis,permission_evidence,approval_account_id,status)
                  VALUES(:campaign,:mid,:sender,:email,:basis,:evidence,:account,'pending_review')
-                 RETURNING id::text"""),{
+                 RETURNING CAST(id AS TEXT)"""),{
                     "campaign":campaign_id,"mid":mid,"sender":sender["id"],
                     "email":address,"basis":body["permission_basis"],"evidence":evidence,
                     "account":account}).scalar_one()
@@ -248,7 +248,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
                    AND NOT EXISTS (SELECT 1 FROM public.ld_suppressions s
                        JOIN public.ld_service_workspaces w ON w.team_id=s.team_id
                        WHERE w.id=c.workspace_id AND s.normalized_email=q.recipient_email)
-                 RETURNING q.id::text"""),{"qid":queue_id,"cid":campaign_id,"ws":ws,
+                 RETURNING q.CAST(id AS TEXT)"""),{"qid":queue_id,"cid":campaign_id,"ws":ws,
                    "account":account}).scalar_one_or_none()
             if not row:raise HTTPException(409,"Approval was not permitted. Check review status, owner and suppression.")
         return {"ok":True,"status":"approved","note":"Approved for a future controlled release. Sending is not active."}
