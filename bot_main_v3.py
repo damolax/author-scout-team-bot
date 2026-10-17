@@ -3768,6 +3768,10 @@ if os.getenv("LETTERDESK_V2_ENABLED", "false").strip().lower() in {"true", "1", 
     install_import_api(app, legacy.engine, _web_auth)
     from letterdesk_flow_api import install_flow_api
     install_flow_api(app, legacy.engine, _web_auth)
+    from letterdesk_gmail_api import install_gmail_connection_api
+    install_gmail_connection_api(app, legacy.engine, _web_auth)
+    from letterdesk_campaign_api import install_campaign_api
+    install_campaign_api(app, legacy.engine, _web_auth)
 
 # Enforce an isolated, read-only preview. This protects the staging Neon snapshot
 # against legacy state-changing routes (including email sends and source-scanning jobs).
@@ -3789,6 +3793,31 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             or path.startswith("/api/v2/letterdesk/")
         )
         allowed_post = path in {"/api/v1/auth/neon-session", "/api/v2/letterdesk/auth/email"}
+        # Gmail OAuth callbacks do not authenticate with the app session header.
+        # Disabled unless Gmail connection flag is on, verified by OAuth state.
+        gmail_callback = (
+            request.method == "GET"
+            and path == "/api/v2/letterdesk/gmail/callback"
+        )
+        gmail_connect = (
+            request.method == "POST"
+            and path == "/api/v2/letterdesk/gmail/connect"
+            and os.getenv("LETTERDESK_GMAIL_OAUTH_ENABLED", "false").lower() in ("true", "1", "yes")
+        )
+        gmail_disconnect = (
+            request.method == "POST"
+            and path.startswith("/api/v2/letterdesk/gmail/connections/")
+            and path.endswith("/disconnect")
+            and os.getenv("LETTERDESK_GMAIL_OAUTH_ENABLED", "false").lower() in ("true", "1", "yes")
+        )
+        campaign_write = (
+            request.method == "POST"
+            and path.startswith("/api/v2/letterdesk/services/")
+            and (
+                "/campaigns" in path or "/senders/" in path
+            )
+            and os.getenv("LETTERDESK_CAMPAIGN_WRITE_ENABLED", "false").lower() in ("true", "1", "yes")
+        )
         # File previews are read-only; confirmations are separately feature-gated.
         allow_import_preview = (
             request.method == "POST" and path.startswith("/api/v2/letterdesk/services/")
@@ -3822,6 +3851,6 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             and (path.endswith("/scout/jobs") or
                  ("/scout/jobs/" in path and path.endswith("/run")))
         )
-        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or flow_read_only_post)) or flow_write:
+        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write)) or flow_write:
             return await call_next(request)
         return JSONResponse({"detail": "This preview is read-only. Sending, scraping and mutating operations are disabled."}, status_code=403)
