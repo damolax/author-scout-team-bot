@@ -137,6 +137,10 @@ def validate_flow(flow,service=None):
         src=edge.get("from");target=edge.get("to");outcome=edge.get("outcome");action=edge.get("action")
         if src not in codes:problems.append(f"Unknown source: {str(src)[:40]}")
         if target is not None and target not in codes:problems.append(f"Unknown target: {str(target)[:40]}")
+        if src in nodes_by_code and nodes_by_code[src].get("stage") in ("terminal","success"):
+            problems.append(f"Completed message cannot have outgoing branches: {src}")
+        if target in nodes_by_code and nodes_by_code[target].get("stage")=="terminal":
+            problems.append(f"Terminal label cannot be used as a sendable target: {target}")
         if outcome not in OUTCOMES:problems.append(f"Invalid response outcome: {str(outcome)[:30]}")
         if action not in ACTIONS:problems.append(f"Invalid branch action: {str(action)[:30]}")
         key=(src,outcome)
