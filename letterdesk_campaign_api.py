@@ -64,8 +64,8 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
         conditions=" AND c.web_account_id=:owner" if owner is not None else ""
         p={"id":identity_id,"team":team}
         if owner is not None:p["owner"]=owner
-        value=db.execute(text("""SELECT s.CAST(id AS TEXT) AS id,s.email,s.enabled,
-           s.verification_status,c.CAST(id AS TEXT) AS connection_id,c.status AS connection_status,
+        value=db.execute(text("""SELECT CAST(s.id AS TEXT) AS id,s.email,s.enabled,
+           s.verification_status,CAST(c.id AS TEXT) AS connection_id,c.status AS connection_status,
            c.web_account_id
            FROM public.ld_gmail_sender_identities s
            JOIN public.ld_gmail_connections c ON c.id=s.connection_id
@@ -76,7 +76,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
     def senders(request:Request,service:str):
         team,account,ws=auth_workspace(request,service)
         with engine.connect() as db:
-            rows=db.execute(text("""SELECT s.CAST(id AS TEXT) AS id,s.email,s.enabled,
+            rows=db.execute(text("""SELECT CAST(s.id AS TEXT) AS id,s.email,s.enabled,
                 s.verification_status,c.primary_email AS google_account,c.web_account_id,
                 EXISTS(SELECT 1 FROM public.ld_campaigns camp
                        WHERE camp.sender_identity_id=s.id AND camp.workspace_id=CAST(:ws AS uuid))
@@ -108,8 +108,8 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
     def list_campaigns(request:Request,service:str):
         team,account,ws=auth_workspace(request,service)
         with engine.connect() as db:
-            rows=db.execute(text("""SELECT c.CAST(id AS TEXT),c.name,c.status,
-                c.sender_identity_CAST(id AS TEXT) AS sender_identity_id,
+            rows=db.execute(text("""SELECT CAST(c.id AS TEXT),c.name,c.status,
+                CAST(c.sender_identity_id AS TEXT) AS sender_identity_id,
                 s.email AS sender_email,c.max_daily,c.min_interval_seconds,
                 c.send_window_start,c.send_window_end,c.timezone_name,CAST(c.created_at AS TEXT),c.owner_web_account_id,
                 COUNT(q.id) AS queue_total,
@@ -170,7 +170,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
                   WHERE id=:campaign AND workspace_id=CAST(:ws AS uuid)"""),{
                     "campaign":campaign_id,"ws":ws}).scalar_one_or_none()
             if not valid:raise HTTPException(404,"Campaign not found")
-            rows=db.execute(text("""SELECT q.CAST(id AS TEXT),q.message_record_CAST(id AS TEXT),q.recipient_email,
+            rows=db.execute(text("""SELECT CAST(q.id AS TEXT),CAST(q.message_record_id AS TEXT),q.recipient_email,
                  q.permission_basis,q.status,CAST(q.scheduled_at AS TEXT),CAST(q.approved_at AS TEXT),
                  CAST(q.sent_at AS TEXT),q.failure_code
                  FROM public.ld_campaign_queue q WHERE q.campaign_id=:id
@@ -248,7 +248,7 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
                    AND NOT EXISTS (SELECT 1 FROM public.ld_suppressions s
                        JOIN public.ld_service_workspaces w ON w.team_id=s.team_id
                        WHERE w.id=c.workspace_id AND s.normalized_email=q.recipient_email)
-                 RETURNING q.CAST(id AS TEXT)"""),{"qid":queue_id,"cid":campaign_id,"ws":ws,
+                 RETURNING CAST(q.id AS TEXT)"""),{"qid":queue_id,"cid":campaign_id,"ws":ws,
                    "account":account}).scalar_one_or_none()
             if not row:raise HTTPException(409,"Approval was not permitted. Check review status, owner and suppression.")
         return {"ok":True,"status":"approved","note":"Approved for a future controlled release. Sending is not active."}
