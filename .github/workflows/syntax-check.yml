@@ -39,6 +39,8 @@ jobs:
         run: python -m unittest -v tests/test_letterdesk_v2_api.py
       - name: Letter Desk isolated-preview safety
         run: LETTERDESK_STAGING_ISOLATED=true LETTERDESK_V2_ENABLED=true python -m unittest -v tests/test_letterdesk_staging_guard.py
+      - name: Letter Desk first-party login bridge safety
+        run: python -m unittest -v tests/test_letterdesk_staging_auth.py
 
   web:
     runs-on: ubuntu-latest
