@@ -214,3 +214,17 @@ def quarantine_stale_attempts(engine):
                SET status='paused',updated_at=now() WHERE id=ANY(:campaigns)"""),{
                    "campaigns":list(affected)})
     return len(affected)
+
+
+async def delivery_worker(engine, poll_seconds=75):
+    """One strictly gated worker. Never starts in staging or without reply safety."""
+    if not delivery_release_ready():return
+    await asyncio.to_thread(quarantine_stale_attempts,engine)
+    while delivery_release_ready():
+        try:
+            await deliver_one(engine)
+        except asyncio.CancelledError:raise
+        except Exception as exc:
+            # Never dump recipient addresses, tokens, or message content to logs.
+            print("LETTERDESK_DELIVERY_WORKER_ERROR="+type(exc).__name__)
+        await asyncio.sleep(max(60,int(poll_seconds)))
