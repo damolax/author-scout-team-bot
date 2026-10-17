@@ -60,7 +60,7 @@ export default function ReplyStudio({serviceKey,keyValue,request,active}){
     setSender('');setBody('');setSelectedFlow('');setLastReviewed(null)
     setSuggestion(null);setError('');setNotice('');setIdempotencyKey(clientKey())
   },[serviceKey])
-  useEffect(()=>{if(active&&keyValue)refresh()},[active,keyValue,serviceKey,filter])
+  useEffect(()=>{if(active&&keyValue&&open)refresh()},[active,keyValue,serviceKey,filter,open])
 
   const reply=inbox.find(x=>x.id===selectedReply)||null
   const selectedConversation=conversations.find(x=>x.id===conversation)
