@@ -30,32 +30,47 @@ async function request(path, key, options = {}) {
   }
 }
 
-async function waitForBackend(maxWaitMs = 75000) {
+async function waitForBackend(maxWaitMs = 150000, onProgress = () => {}) {
   const started = Date.now()
   let lastError = null
+  let attempts = 0
   while (Date.now() - started < maxWaitMs) {
+    attempts++
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 12000)
+    const timer = setTimeout(() => controller.abort(), 16000)
     try {
       const res = await fetch(API_BASE + '/api/v1/health?ts=' + Date.now(), {
         method: 'GET',
         cache: 'no-store',
         signal: controller.signal,
       })
-      clearTimeout(timer)
       if (res.ok) {
         const body = await res.json().catch(() => ({}))
         if (body?.ok) return true
       }
-    } catch (e) {
-      lastError = e
-      clearTimeout(timer)
-    }
-    await new Promise(resolve => setTimeout(resolve, 1800))
+      lastError = new Error('Workspace server returned ' + res.status)
+    } catch (e) { lastError = e }
+    finally { clearTimeout(timer) }
+    const seconds = Math.floor((Date.now() - started) / 1000)
+    onProgress(seconds < 40
+      ? 'Starting your secure workspace…'
+      : 'The preview server is waking up. This can take up to two minutes on its first visit.')
+    if (Date.now() - started >= maxWaitMs) break
+    await new Promise(resolve => setTimeout(resolve, Math.min(2500 + attempts * 250, 4500)))
   }
-  throw lastError || new Error('Author Scout could not wake the secure login service. Please try again.')
+  throw new Error('The preview server did not become ready. Please try again in a moment. ' + (lastError?.message || ''))
 }
 
+async function requestWithRetry(path, key, options = {}, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try { return await request(path, key, options) }
+    catch (e) {
+      if (e?.status && ![502, 503, 504].includes(e.status)) throw e
+      if (i === attempts - 1) throw e
+      await new Promise(resolve => setTimeout(resolve, 900 * (i + 1)))
+    }
+  }
+}
 function fmt(value) {
   if (!value) return '—'
   const d = new Date(value)
@@ -1169,6 +1184,13 @@ const NAV = [
 
 function AppCore() {
   useEffect(() => { if (ENABLE_LETTERDESK_V2) { document.title = 'Letter Desk — Unified Scouting'; const description = document.querySelector('meta[name="description"]'); if (description) description.setAttribute('content', 'Letter Desk — six specialized prospect research and outreach workspaces.') } }, [])
+  useEffect(() => {
+    if (!ENABLE_LETTERDESK_V2) return undefined
+    // Warm up the free staging service while the user signs in, without sending data.
+    const ctrl = new AbortController()
+    fetch(API_BASE + '/api/v1/health?warm=1', { signal: ctrl.signal, cache: 'no-store' }).catch(() => {})
+    return () => ctrl.abort()
+  }, [])
   const authEpoch=useRef(0)
   const [keyValue, setKeyValue] = useState(() => localStorage.getItem('authorScoutSession') || '')
   const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(location.pathname==='/reset-password'||params.has('token')||params.has('error')||params.get('signin')==='1'||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
@@ -1209,39 +1231,63 @@ function AppCore() {
     const epoch=authEpoch.current
     setChecking(true)
     setLoginError('')
-    setLoginStatus('Opening your workspace…')
+    setLoginStatus('Finishing your secure sign-in…')
     try {
-      let token=sessionTokenFrom(authResult)
-      if (!token) {
-        const current=await authClient.getSession()
-        if (current?.error) throw new Error(current.error.message || 'Could not read your session')
-        token=sessionTokenFrom(current)
+      let token = sessionTokenFrom(authResult)
+      let authError = null
+      // Neon Auth may settle cookies slightly later than the sign-in response,
+      // particularly after Google redirects and on mobile browsers.
+      for (let attempt = 0; !token && attempt < 6; attempt++) {
+        try {
+          const current = await authClient.getSession()
+          if (current?.error) authError = current.error
+          token = sessionTokenFrom(current)
+        } catch (e) { authError = e }
+        if (!token && attempt < 5) await new Promise(resolve => setTimeout(resolve, 350 + 200 * attempt))
       }
-      if (!token) throw new Error('Signed in, but no secure session token was returned. Please try again.')
-      setLoginStatus('Starting your Author Scout workspace…')
-      await waitForBackend()
-      const d=await request('/api/v1/auth/neon-session','',{
-        method:'POST',
-        body:JSON.stringify({ session_token: token })
-      })
-      if(epoch!==authEpoch.current)return null
-      localStorage.setItem('authorScoutSession',d.session)
-      setKeyValue(d.session)
-      const s=await request('/api/v1/session',d.session)
-      if(epoch!==authEpoch.current)return null
+      if (!token) throw new Error(authError?.message ||
+        'Google/Neon sign-in succeeded but the browser did not return a session token. Please allow site data for this preview and try again.')
+      setLoginStatus('Connecting to Letter Desk…')
+      await waitForBackend(150000, setLoginStatus)
+      if(epoch !== authEpoch.current) return null
+      let data
+      try {
+        data = await requestWithRetry('/api/v1/auth/neon-session','', {
+          method:'POST',
+          body:JSON.stringify({ session_token: token })
+        }, 3)
+      } catch (e) {
+        if (e?.status === 401) {
+          // Refresh only once after a stale login result. Never retry bad credentials.
+          const current = await authClient.getSession()
+          const fresh = sessionTokenFrom(current)
+          if (!fresh || fresh === token) throw new Error('Your sign-in session could not be verified. Please sign out and sign in again.')
+          data = await request('/api/v1/auth/neon-session','',{
+            method:'POST', body:JSON.stringify({ session_token: fresh })
+          })
+        } else throw e
+      }
+      if(epoch !== authEpoch.current) return null
+      if (!data?.session) throw new Error('The server did not return a Letter Desk session.')
+      // Do not store a half-complete app session before verification succeeds.
+      setLoginStatus('Opening your service workspaces…')
+      const s=await requestWithRetry('/api/v1/session', data.session, {}, 3)
+      if(epoch !== authEpoch.current) return null
+      localStorage.setItem('authorScoutSession',data.session)
+      localStorage.setItem('authorScoutSessionInfo',JSON.stringify({key:data.session,session:s}))
+      setKeyValue(data.session)
       setSession(s)
-      localStorage.setItem('authorScoutSessionInfo',JSON.stringify({key:d.session,session:s}))
+      if (ENABLE_LETTERDESK_V2) setTab('services')
       setLoginStatus('')
       return s
     } catch(e) {
-      setLoginError(e?.message || 'Could not open your workspace.')
-      setLoginStatus('')
+      if (epoch === authEpoch.current) {
+        setLoginError(e?.message || 'Could not open your Letter Desk workspace.')
+        setLoginStatus('')
+      }
       throw e
-    } finally {
-      setChecking(false)
-    }
+    } finally { if (epoch === authEpoch.current) setChecking(false) }
   }, [])
-
   const startEmailAuth = useCallback(async (mode, form) => {
     setChecking(true)
     setLoginError('')
