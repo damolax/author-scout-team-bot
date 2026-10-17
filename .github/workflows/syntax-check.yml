@@ -16,7 +16,7 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
       - name: Compile Python files
-        run: python -m py_compile bot_main.py bot_main_v3.py letterdesk_service_import.py letterdesk_import_plan.py letterdesk_import_commit.py letterdesk_import_api.py letterdesk_flow_engine.py letterdesk_flow_api.py
+        run: python -m py_compile bot_main.py bot_main_v3.py letterdesk_service_import.py letterdesk_import_plan.py letterdesk_import_commit.py letterdesk_import_api.py letterdesk_flow_engine.py letterdesk_flow_api.py letterdesk_gmail_api.py letterdesk_campaign_api.py
       - name: Import v3 overlay
         run: python -c "import bot_main_v3; print('Author Scout', bot_main_v3.app.version)"
       - name: Letterdesk import regression
@@ -53,6 +53,10 @@ jobs:
         run: python -m unittest -v tests/test_letterdesk_flow_engine.py
       - name: Letter Desk Phase 5 flow API permission gates
         run: python -m unittest -v tests/test_letterdesk_flow_api.py
+      - name: Letter Desk Phase 6 Gmail OAuth and alias verification safety
+        run: python -m unittest -v tests/test_letterdesk_gmail_api.py
+      - name: Letter Desk Phase 6 campaign permissions and controls
+        run: python -m unittest -v tests/test_letterdesk_campaign_api.py
 
   web:
     runs-on: ubuntu-latest
