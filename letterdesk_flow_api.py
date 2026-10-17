@@ -28,7 +28,7 @@ def install_flow_api(app:FastAPI, engine, authenticate_web_session:Callable):
         if team<=0:raise HTTPException(403,"A linked team is required")
         if service not in SERVICE_MODES:raise HTTPException(404,"Service not found")
         with engine.connect() as db:
-            row=db.execute(text("""SELECT id::text AS workspace_id FROM public.ld_service_workspaces
+            row=db.execute(text("""SELECT CAST(id AS TEXT) AS workspace_id FROM public.ld_service_workspaces
                 WHERE team_id=:team AND service_key=:service AND is_active=true"""),
                 {"team":team,"service":service}).mappings().first()
         if not row:raise HTTPException(404,"Service workspace not found")
@@ -62,8 +62,8 @@ def install_flow_api(app:FastAPI, engine, authenticate_web_session:Callable):
     def list_flows(request:Request,service:str):
         team,wid=workspace(request,service)
         with engine.connect() as db:
-            data=db.execute(text("""SELECT id::text,name,status,revision,language,
-                created_at::text,updated_at::text
+            data=db.execute(text("""SELECT CAST(id AS TEXT),name,status,revision,language,
+                CAST(created_at AS TEXT),CAST(updated_at AS TEXT)
                 FROM public.ld_flow_designs WHERE workspace_id=CAST(:wid AS uuid)
                 ORDER BY updated_at DESC LIMIT 100"""),{"wid":wid}).mappings().all()
         return {"ok":True,"flows":[dict(x) for x in data],
@@ -73,8 +73,8 @@ def install_flow_api(app:FastAPI, engine, authenticate_web_session:Callable):
     def get_flow(request:Request,service:str,flow_id:UUID):
         team,wid=workspace(request,service)
         with engine.connect() as db:
-            row=db.execute(text("""SELECT id::text,name,status,revision,language,document,
-                    created_at::text,updated_at::text FROM public.ld_flow_designs
+            row=db.execute(text("""SELECT CAST(id AS TEXT),name,status,revision,language,document,
+                    CAST(created_at AS TEXT),CAST(updated_at AS TEXT) FROM public.ld_flow_designs
                     WHERE id=:id AND workspace_id=CAST(:wid AS uuid)"""),
                     {"id":flow_id,"wid":wid}).mappings().first()
         if row is None:raise HTTPException(404,"Template not found in this service")
@@ -88,7 +88,7 @@ def install_flow_api(app:FastAPI, engine, authenticate_web_session:Callable):
                 WHERE id=:id AND workspace_id=CAST(:wid AS uuid)"""),
                 {"id":flow_id,"wid":wid}).scalar_one_or_none()
             if not found:raise HTTPException(404,"Template not found")
-            rows=db.execute(text("""SELECT revision,edit_note,created_at::text
+            rows=db.execute(text("""SELECT revision,edit_note,CAST(created_at AS TEXT)
                 FROM public.ld_flow_design_revisions
                 WHERE design_id=:id ORDER BY revision DESC LIMIT 50"""),
                 {"id":flow_id}).mappings().all()
@@ -144,7 +144,7 @@ def install_flow_api(app:FastAPI, engine, authenticate_web_session:Callable):
                 row=db.execute(text("""INSERT INTO public.ld_flow_designs
                   (workspace_id,name,language,status,revision,document)
                   VALUES(CAST(:wid AS uuid),:name,:language,'draft',1,CAST(:doc AS jsonb))
-                  RETURNING id::text"""),
+                  RETURNING CAST(id AS TEXT)"""),
                   {"wid":wid,"name":name,"language":language,"doc":json.dumps(doc)}).scalar_one()
                 db.execute(text("""INSERT INTO public.ld_flow_design_revisions
                   (design_id,revision,snapshot,edit_note)
@@ -193,7 +193,7 @@ def install_flow_api(app:FastAPI, engine, authenticate_web_session:Callable):
             updated=db.execute(text("""UPDATE public.ld_flow_designs
                 SET status='archived',updated_at=now()
                 WHERE id=:id AND workspace_id=CAST(:wid AS uuid) AND status='draft'
-                RETURNING id::text"""),{"id":flow_id,"wid":wid}).scalar_one_or_none()
+                RETURNING CAST(id AS TEXT)"""),{"id":flow_id,"wid":wid}).scalar_one_or_none()
             if not updated:raise HTTPException(404,"Draft template not found")
         return {"ok":True,"archived":True,
                 "note":"Archived without deleting revisions or changing any conversations."}
