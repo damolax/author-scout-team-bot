@@ -3758,6 +3758,8 @@ async def connection_shutdown():
 if os.getenv("LETTERDESK_V2_ENABLED", "false").strip().lower() in {"true", "1", "yes"}:
     from letterdesk_v2_api import install_letterdesk_v2_routes
     install_letterdesk_v2_routes(app, legacy.engine, _web_auth)
+    from letterdesk_scout_api import install_scouting_api
+    install_scouting_api(app, legacy.engine, _web_auth)
 
 # Enforce an isolated, read-only preview. This protects the staging Neon snapshot
 # against legacy state-changing routes (including email sends and source-scanning jobs).
@@ -3779,6 +3781,15 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             or path.startswith("/api/v2/letterdesk/")
         )
         allowed_post = path in {"/api/v1/auth/neon-session", "/api/v2/letterdesk/auth/email"}
-        if (request.method == "GET" and allowed_get) or (request.method == "POST" and allowed_post):
+        # Phase 3 scouting is separately permission-gated and NEVER grants a
+        # Gmail sending, source-worker, SMTP or other legacy mutation exception.
+        allow_scout = (
+            os.getenv("LETTERDESK_SCOUT_WRITE_ENABLED", "false").strip().lower() in {"true", "1", "yes"}
+            and request.method == "POST"
+            and path.startswith("/api/v2/letterdesk/services/")
+            and (path.endswith("/scout/jobs") or
+                 ("/scout/jobs/" in path and path.endswith("/run")))
+        )
+        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout)):
             return await call_next(request)
         return JSONResponse({"detail": "This preview is read-only. Sending, scraping and mutating operations are disabled."}, status_code=403)
