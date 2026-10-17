@@ -35,6 +35,8 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
   const [expanded,setExpanded]=useState(false)
+  const [undoPreview,setUndoPreview]=useState(null)
+  const [undoFilename,setUndoFilename]=useState('')
 
   async function history(){
     if(!keyValue||!active)return
@@ -98,6 +100,44 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
     }catch(e){setError(e.message)}
     finally{setBusy('')}
   }
+  async function viewUndo(batch){
+    setBusy('undo-preview');setError('');setNotice('');setUndoPreview(null)
+    try{
+      const p=await transfer('/api/v2/letterdesk/services/'+serviceKey+
+        '/imports/'+encodeURIComponent(batch.id)+'/undo-preview',keyValue)
+      setUndoPreview(p);setUndoFilename('')
+    }catch(e){setError(e.message||'Could not inspect undo safety.')}
+    finally{setBusy('')}
+  }
+
+  async function confirmUndo(){
+    if(!undoPreview?.write_enabled||!undoPreview?.summary?.eligible||
+        undoFilename!==undoPreview.filename||busy)return
+    if(!window.confirm('Undo the selected import? Unused records may be removed permanently. Suppressions will remain.'))return
+    setBusy('undo');setError('');setNotice('')
+    try{
+      const controller=new AbortController()
+      const timer=setTimeout(()=>controller.abort(),60000)
+      let response
+      try{
+        response=await fetch(API+'/api/v2/letterdesk/services/'+serviceKey+'/imports/'+
+          encodeURIComponent(undoPreview.batch_id)+'/undo',{
+            method:'POST',headers:{'X-Author-Scout-Key':keyValue,'Content-Type':'application/json'},
+            body:JSON.stringify({filename:undoFilename,confirmation_token:undoPreview.confirmation_token}),
+            signal:controller.signal
+          })
+      }finally{clearTimeout(timer)}
+      const data=await response.json().catch(()=>({}))
+      if(!response.ok)throw new Error(data.detail||'Import undo was not completed.')
+      setNotice('Import reversed. '+(data.summary?.removed_drafts||0)+' unused drafts and '+
+        (data.summary?.removed_leads||0)+' unshared leads removed. Shared contacts and opt-outs kept.')
+      setUndoPreview(null);setUndoFilename('')
+      await history()
+      onImported?.()
+    }catch(e){setError(e.message||'Unable to reverse import. No changes were confirmed.')}
+    finally{setBusy('')}
+  }
+
   const s=preview?.summary||{}
   return <section className="ld-import-card" aria-label="Service import workspace">
     <div className="ld-import-top">
@@ -159,9 +199,27 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
         <div className="ld-import-history-head"><strong>Previous imports for this service</strong>
           <button onClick={history} type="button">Refresh</button></div>
         {imports.length?<ul>{imports.slice(0,8).map(x=><li key={x.id}>
-            <span>{x.filename} <small>{new Date(x.created_at).toLocaleString()}</small></span>
-            <span>{x.rows_imported||0} accepted · {x.rows_skipped||0} skipped</span>
+            <span>{x.filename} <small>{new Date(x.created_at).toLocaleString()} · {x.status.replaceAll('_',' ')}</small></span>
+            <span>{x.rows_imported||0} accepted · {x.rows_skipped||0} skipped
+              {x.status==='completed'&&<button type="button" disabled={Boolean(busy)}
+                onClick={()=>viewUndo(x)} className="ld-import-undo-trigger">Review undo</button>}
+            </span>
           </li>)}</ul>:<p>No completed imports recorded yet.</p>}
+        {undoPreview&&<div className="ld-import-undo-panel">
+          <strong>Review import reversal · {undoPreview.filename}</strong>
+          <p>{undoPreview.summary.draft_messages} imported message drafts · {undoPreview.summary.owned_opportunities} batch-owned opportunities · {undoPreview.summary.owned_leads} batch-owned leads.</p>
+          <p>Messages already sent or queued: {undoPreview.summary.changed_messages+undoPreview.summary.queued_messages}.
+            Replies: {undoPreview.summary.replied_conversations}. Shared or researched contacts will be retained.
+            Do-not-contact records are never removed by undo.</p>
+          {!undoPreview.summary.eligible?<p className="ld-import-error">Automatic undo is blocked because records have been used, edited or answered.</p>
+          : !undoPreview.write_enabled?<p className="ld-import-locked">Undo is disabled in this protected preview.</p>
+          : <><label>Type the complete filename to confirm
+                <input value={undoFilename} onChange={e=>setUndoFilename(e.target.value)}
+                  placeholder={undoPreview.filename} autoComplete="off" /></label>
+              <button type="button" disabled={Boolean(busy)||undoFilename!==undoPreview.filename}
+                onClick={confirmUndo} className="ld-import-undo-danger">Undo unused imported records</button></>}
+          <button type="button" onClick={()=>setUndoPreview(null)}>Cancel</button>
+        </div>}
       </div>
     </div>}
   </section>
