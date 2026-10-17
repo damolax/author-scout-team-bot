@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from letterdesk_gmail_api import (
     BASIC_SCOPES,ALIAS_SCOPE,alias_candidates,build_authorization_url,
-    hash_state,normalize_email,install_gmail_connection_api,
+    hash_state,normalize_email,install_gmail_connection_api,google_config,
 )
 
 class GmailConnectionTests(unittest.TestCase):
@@ -42,6 +42,23 @@ class GmailConnectionTests(unittest.TestCase):
         basic=alias_candidates("primary@example.org",data,False)
         self.assertEqual(len(basic),1)
         self.assertEqual(basic[0]["source"],"google_primary")
+
+    def test_callback_must_match_declared_server_origin(self):
+        config={
+            "GOOGLE_CLIENT_ID":"test-client",
+            "GOOGLE_CLIENT_SECRET":"test-only-secret",
+            "LETTERDESK_GMAIL_SERVER_ORIGIN":"https://letterdesk-v2-api-preview.onrender.com",
+            "LETTERDESK_GMAIL_FRONTEND_ORIGIN":"https://letterdesk-v2-ui-preview.onrender.com",
+            "LETTERDESK_GMAIL_REDIRECT_URI":"https://attacker.example/api/v2/letterdesk/gmail/callback"
+        }
+        with patch.dict(os.environ,config):
+            with self.assertRaises(HTTPException):
+                google_config()
+            os.environ["LETTERDESK_GMAIL_REDIRECT_URI"]=(
+                "https://letterdesk-v2-api-preview.onrender.com/api/v2/letterdesk/gmail/callback")
+            _,_,uri,frontend=google_config()
+            self.assertEqual(frontend,"https://letterdesk-v2-ui-preview.onrender.com")
+            self.assertIn("letterdesk-v2-api-preview.onrender.com",uri)
 
     def test_oauth_state_hashes_are_nonrecoverable(self):
         self.assertEqual(len(hash_state("random-nonce")),64)
