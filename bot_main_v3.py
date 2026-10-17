@@ -3738,10 +3738,22 @@ async def connection_startup():
     print(f"AI_RESEARCH_WORKER started=True configured={bool(OPENAI_API_KEY)} model={OPENAI_RESEARCH_MODEL}")
 
 
+@app.on_event("startup")
+async def letterdesk_campaign_startup():
+    # Never start a delivery worker in isolated staging, even when draft
+    # editing and OAuth account connections are enabled for QA.
+    if os.getenv("LETTERDESK_V2_ENABLED", "false").lower() not in ("true", "1", "yes"):
+        return
+    from letterdesk_campaign_delivery import delivery_release_ready, delivery_worker
+    if delivery_release_ready():
+        app.state.ld_delivery_worker = asyncio.create_task(delivery_worker(legacy.engine))
+        print("LETTERDESK_DELIVERY worker started after all production release gates")
+
+
 @app.on_event("shutdown")
 async def connection_shutdown():
     global _http_client
-    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker","ld_scout_worker"):
+    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker","ld_scout_worker","ld_delivery_worker"):
         task = getattr(app.state, task_name, None)
         if task:
             task.cancel()
