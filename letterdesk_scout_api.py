@@ -37,7 +37,7 @@ def install_scouting_api(app: FastAPI, engine, authenticate_web_session: Callabl
     def workspace(team_id,service):
         if service not in SERVICE_DEFINITIONS: raise HTTPException(status_code=404, detail="Service does not exist")
         with engine.connect() as conn:
-            row=conn.execute(text("""SELECT id::text AS id,service_key FROM public.ld_service_workspaces
+            row=conn.execute(text("""SELECT CAST(id AS TEXT) AS id,service_key FROM public.ld_service_workspaces
                WHERE team_id=:team AND service_key=:service AND is_active=true LIMIT 1"""),
                {"team":team_id,"service":service}).mappings().first()
         if row is None: raise HTTPException(status_code=404,detail="Workspace unavailable")
@@ -154,32 +154,65 @@ def install_scouting_api(app: FastAPI, engine, authenticate_web_session: Callabl
 
     @router.post("/services/{service_key}/scout/jobs/{job_id}/run")
     def run_job(request: Request,service_key: str,job_id: uuid.UUID):
+        """Operator-initiated action is now a queue recheck; a dedicated worker executes."""
         team=ctx(request)
         writer_enabled()
         ws=workspace(team,service_key)
-        # Claim once via conditional UPDATE; another request cannot process the same job.
-        with engine.begin() as db:
-            job=db.execute(text("""UPDATE public.ld_discovery_jobs
-                SET status='running',started_at=now()
-                WHERE id=:id AND workspace_id=CAST(:w AS uuid) AND status='queued'
-                RETURNING *"""),{"id":job_id,"w":ws["id"]}).mappings().first()
-        if not job: raise HTTPException(409,"Job not queued, or it belongs to another workspace")
-        try:
-            report=_execute_job(engine,dict(job),ws["id"],team,service_key)
-            with engine.begin() as db:
-                db.execute(text("""UPDATE public.ld_discovery_jobs
-                    SET status='completed',completed_at=now(),queries_run=:queries,pages_scanned=:pages,
-                        leads_created=:created,leads_linked=:linked,rejected_results=:rejected,
-                        notes=CAST(:notes AS jsonb) WHERE id=:id"""),{**report,"id":job_id,"notes":json.dumps(report["notes"][:20])})
-            return {"ok":True,"status":"completed","job_id":str(job_id),**report}
-        except Exception as e:
-            # No raw URLs, page text, credentials or exception details in client responses.
-            with engine.begin() as db:
-                db.execute(text("""UPDATE public.ld_discovery_jobs SET status='failed',completed_at=now(),
-                    error=:err WHERE id=:id"""),{"id":job_id,"err":type(e).__name__+": scout could not complete"})
-            raise HTTPException(502,"This scouting job could not complete. Please review its status and try a new job.")
+        with engine.connect() as db:
+            status=db.execute(text("""SELECT status FROM public.ld_discovery_jobs
+                  WHERE id=:id AND workspace_id=CAST(:w AS uuid)"""),
+                  {"id":job_id,"w":ws["id"]}).scalar_one_or_none()
+        if status is None:raise HTTPException(404,"Discovery job not found")
+        return {"ok":True,"status":status,"job_id":str(job_id),
+                "note":"Background discovery worker processes queued jobs; no messages are sent."}
 
     app.include_router(router)
+
+
+def run_next_queued_job(engine):
+    """One durable queue iteration. Single-worker by default; DB claiming prevents duplicates."""
+    with engine.begin() as db:
+        job=db.execute(text("""WITH picked AS (
+            SELECT j.id FROM public.ld_discovery_jobs j
+            JOIN public.ld_service_workspaces w ON w.id=j.workspace_id
+            WHERE j.status='queued' AND w.is_active=true
+            ORDER BY j.created_at ASC LIMIT 1 FOR UPDATE OF j SKIP LOCKED
+        )
+        UPDATE public.ld_discovery_jobs j
+        SET status='running',started_at=now()
+        FROM picked WHERE j.id=picked.id
+        RETURNING j.*""")).mappings().first()
+    if not job:return False
+    job=dict(job)
+    try:
+        with engine.connect() as db:
+            ws=db.execute(text("""SELECT CAST(w.id AS TEXT) AS workspace_id,w.team_id,w.service_key
+                FROM public.ld_service_workspaces w WHERE w.id=:id"""),{"id":job["workspace_id"]}).mappings().first()
+        if not ws:raise RuntimeError("Workspace removed")
+        report=_execute_job(engine,job,ws["workspace_id"],int(ws["team_id"]),ws["service_key"])
+        with engine.begin() as db:
+            db.execute(text("""UPDATE public.ld_discovery_jobs
+                SET status='completed',completed_at=now(),queries_run=:queries,pages_scanned=:pages,
+                    leads_created=:created,leads_linked=:linked,rejected_results=:rejected,
+                    notes=CAST(:notes AS jsonb) WHERE id=:id"""),{**report,"id":job["id"],"notes":json.dumps(report["notes"][:20])})
+    except Exception as e:
+        with engine.begin() as db:
+            db.execute(text("""UPDATE public.ld_discovery_jobs SET status='failed',completed_at=now(),
+                error=:err WHERE id=:id"""),{"id":job["id"],"err":type(e).__name__+": scout job failed"})
+    return True
+
+def restore_stale_jobs(engine,older_than_minutes=15):
+    """Recover jobs after Render restarts; existing idempotent source result keys protect duplicates."""
+    with engine.begin() as db:
+        return db.execute(text("""UPDATE public.ld_discovery_jobs
+            SET status='queued',started_at=NULL
+            WHERE status='running' AND started_at<now()-interval '15 minutes'
+            RETURNING id""")).rowcount
+
+def _previous_synchronous_job_runner_unused():
+    # Legacy in-progress runner retained only for migration inspection; the
+    # API no longer executes a potentially multi-minute job in an HTTP request.
+    return None
 
 
 def _execute_job(engine,job: dict,workspace_id: str,team_id: int,service_key: str) -> dict:
