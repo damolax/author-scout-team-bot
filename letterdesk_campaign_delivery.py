@@ -73,8 +73,10 @@ async def gmail_send_one(encrypted_refresh, sender,recipient,subject,body):
         if sent.status_code!=200:
             raise RuntimeError("Gmail rejected the message: HTTP "+str(sent.status_code))
         mid=sent.json().get("id") or ""
-        if not mid:raise RuntimeError("Gmail response lacked message ID: delivery uncertain")
-        return str(mid)
+        thread=sent.json().get("threadId") or ""
+        if not mid or not thread:
+            raise RuntimeError("Gmail response lacks message/thread ID: delivery uncertain")
+        return {"id":str(mid),"thread_id":str(thread)}
 
 def _hold(db,row,reason):
     db.execute(text("""UPDATE public.ld_campaign_queue SET status='held',failure_code=:reason,
@@ -100,11 +102,14 @@ def claim_next(engine):
              JOIN public.ld_service_workspaces w ON w.id=c.workspace_id
              JOIN public.ld_gmail_sender_identities s ON s.id=q.sender_identity_id
              JOIN public.ld_gmail_connections conn ON conn.id=s.connection_id
+             JOIN public.ld_gmail_reply_sync sync ON sync.connection_id=conn.id
              JOIN public.ld_message_records m ON m.id=q.message_record_id
              JOIN public.ld_conversations convo ON convo.id=m.conversation_id
              JOIN public.ld_opportunities o ON o.id=convo.opportunity_id AND o.workspace_id=w.id
              JOIN public.ld_leads l ON l.id=o.lead_id AND l.team_id=w.team_id
              WHERE q.status='approved' AND c.status='active'
+               AND sync.status='healthy'
+               AND sync.last_success_at>now()-interval '30 minutes'
                AND (q.scheduled_at IS NULL OR q.scheduled_at<=now())
              ORDER BY q.scheduled_at NULLS FIRST,q.created_at ASC
              LIMIT 10 FOR UPDATE OF q SKIP LOCKED""")).mappings().all()
@@ -112,7 +117,8 @@ def claim_next(engine):
             row=dict(r)
             if (not row["sender_enabled"] or row["verified"]!="verified"
                 or row["connection_status"]!="connected"
-                or "https://www.googleapis.com/auth/gmail.send" not in (row["scopes"] or [])):
+                or "https://www.googleapis.com/auth/gmail.send" not in (row["scopes"] or [])
+                or "https://www.googleapis.com/auth/gmail.readonly" not in (row["scopes"] or [])):
                 _hold(db,row,"sender_not_verified")
                 continue
             if (row["message_status"]!="needs_review" or row["conversation_status"] in
@@ -191,12 +197,13 @@ async def deliver_one(engine):
                     "id":row["campaign_id"]})
             return {"status":"uncertain"}
         db.execute(text("""UPDATE public.ld_campaign_queue
-            SET status='sent',provider_message_id=:mid,sent_at=now(),updated_at=now()
-            WHERE id=:id AND status='sending'"""),{"mid":mid,"id":row["id"]})
+            SET status='sent',provider_message_id=:mid,provider_thread_id=:thread,
+                sent_at=now(),updated_at=now()
+            WHERE id=:id AND status='sending'"""),{"mid":mid["id"],"thread":mid["thread_id"],"id":row["id"]})
         db.execute(text("""UPDATE public.ld_message_records
              SET status='sent',sender_email=:sender,provider_message_id=:mid
              WHERE id=:message AND status='needs_review'"""),{
-                 "sender":row["sender_email"],"mid":mid,"message":row["message_record_id"]})
+                 "sender":row["sender_email"],"mid":mid["id"],"message":row["message_record_id"]})
         db.execute(text("""UPDATE public.ld_conversations
             SET status='awaiting_reply',message_count=message_count+1,updated_at=now()
             WHERE id=:id AND status NOT IN ('stopped','lost')"""),{
