@@ -19,8 +19,16 @@ def save_confirmed_import(engine,team,service,filename,sha,parsed,rows,summary):
         "details":r["service_details"],"subject":r["subject"],"body":r["first_message"],
         "english":r["first_message_english"],"disposition":r["disposition"],
     } for r in good]
+    # Preserve authored messages even when the lead has no email yet or
+    # already exists; they remain passive templates, not sending instructions.
     meta=[{"row":int(r["row"]),"key":r["identity_key"],"disposition":r["disposition"],
-          "reason":r["reason"][:1000],"branches":r["branches"],
+          "reason":r["reason"][:1000],
+          "branches":{
+              **r["branches"],
+              **({"Message01":r["first_message"]} if r["first_message"] and "Message01" not in r["branches"] else {}),
+              **({"_draft_subject":r["subject"]} if r["subject"] else {}),
+              **({"_draft_english":r["first_message_english"]} if r["first_message_english"] else {}),
+          },
           "message":bool(r["first_message"])} for r in rows]
     with engine.begin() as db:
         # Prevent simultaneous imports for one team from racing against dedupe.
