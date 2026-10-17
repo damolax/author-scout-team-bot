@@ -253,6 +253,36 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
             if not row:raise HTTPException(409,"Approval was not permitted. Check review status, owner and suppression.")
         return {"ok":True,"status":"approved","note":"Approved for a future controlled release. Sending is not active."}
 
+    @router.post("/services/{service}/campaigns/{campaign_id}/activate")
+    def activate(request:Request,service:str,campaign_id:UUID):
+        """Requires all live-delivery gates; never enabled by staging alone."""
+        from letterdesk_campaign_delivery import delivery_release_ready
+        team,account,ws=auth_workspace(request,service)
+        allow_writes()
+        if not delivery_release_ready():
+            raise HTTPException(403,"Gmail sending requires a separate production safety release and verified reply monitoring")
+        with engine.begin() as db:
+            campaign=db.execute(text("""SELECT c.id,c.sender_identity_id,c.owner_web_account_id
+                  FROM public.ld_campaigns c
+                  WHERE c.id=:cid AND c.workspace_id=CAST(:ws AS uuid)
+                    AND c.status='draft' AND c.owner_web_account_id=:owner
+                  FOR UPDATE"""),{
+                  "cid":campaign_id,"ws":ws,"owner":account}).mappings().first()
+            if not campaign:raise HTTPException(404,"Draft campaign not found or you are not its owner")
+            sender=identity(db,campaign["sender_identity_id"],team,account)
+            if not sender or not sender["enabled"] or sender["verification_status"]!="verified" or sender["connection_status"]!="connected":
+                raise HTTPException(403,"Gmail sender verification is no longer valid")
+            qty=db.execute(text("""SELECT count(*) FROM public.ld_campaign_queue q
+                WHERE q.campaign_id=:campaign AND q.status='approved'
+                AND NOT EXISTS(SELECT 1 FROM public.ld_suppressions sup
+                    WHERE sup.team_id=:team AND sup.normalized_email=q.recipient_email)"""),{
+                    "campaign":campaign_id,"team":team}).scalar_one()
+            if not qty:raise HTTPException(409,"No approved, non-suppressed messages are ready")
+            db.execute(text("""UPDATE public.ld_campaigns SET status='active',updated_at=now()
+                WHERE id=:campaign"""),{"campaign":campaign_id})
+        return {"ok":True,"status":"active",
+                "note":"Only human-approved items enter the strictly capped delivery worker."}
+
     @router.post("/services/{service}/campaigns/{campaign_id}/pause")
     def pause(request:Request,service:str,campaign_id:UUID):
         team,account,ws=auth_workspace(request,service)
