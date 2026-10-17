@@ -39,17 +39,31 @@ def sender_crypto():
     except Exception:raise HTTPException(503,"A valid server-side token encryption key is required")
 
 def google_config():
+    """OAuth callback and frontend redirect must match explicitly configured origins."""
     cid=os.getenv("GOOGLE_CLIENT_ID") or ""
     secret=os.getenv("GOOGLE_CLIENT_SECRET") or ""
     redirect=os.getenv("LETTERDESK_GMAIL_REDIRECT_URI") or ""
-    frontend=(os.getenv("LETTERDESK_STAGING_FRONTEND_ORIGIN") or "").rstrip("/")
+    server_origin=(os.getenv("LETTERDESK_GMAIL_SERVER_ORIGIN") or "").rstrip("/")
+    frontend=(os.getenv("LETTERDESK_GMAIL_FRONTEND_ORIGIN")
+              or os.getenv("LETTERDESK_STAGING_FRONTEND_ORIGIN") or "").rstrip("/")
     from urllib.parse import urlparse
+    def parsed_origin(value):
+        p=urlparse(value)
+        if p.scheme!="https" or not p.hostname or p.username or p.password:
+            return None
+        if p.path not in ("","/") or p.query or p.fragment:
+            return None
+        return p.scheme+"://"+p.netloc
     uri=urlparse(redirect)
-    if not (cid and secret and uri.scheme=="https" and uri.path=="/api/v2/letterdesk/gmail/callback"
-            and uri.hostname and uri.hostname.endswith(ALLOWED_REDIRECT_HOSTS)):
-        raise HTTPException(503,"Staging Gmail OAuth credentials/redirect URI are not configured correctly")
-    if not frontend.startswith("https://") or not frontend.endswith(".onrender.com"):
-        raise HTTPException(503,"Staging web redirect is not configured")
+    if not (cid and secret and server_origin
+            and parsed_origin(server_origin)==server_origin
+            and uri.scheme=="https"
+            and uri.path=="/api/v2/letterdesk/gmail/callback"
+            and (uri.scheme+"://"+uri.netloc)==server_origin
+            and not uri.query and not uri.fragment):
+        raise HTTPException(503,"Gmail OAuth server origin and callback URL are not configured correctly")
+    if not frontend or parsed_origin(frontend)!=frontend:
+        raise HTTPException(503,"Gmail OAuth frontend origin is not configured correctly")
     return cid,secret,redirect,frontend
 
 def hash_state(value):
