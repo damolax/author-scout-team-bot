@@ -141,13 +141,11 @@ def execute(engine,team,service,batch_id,account,expected_filename,confirmation_
             WHERE o.service_details->>'_letterdesk_import_batch'=:batch
               AND NOT EXISTS(SELECT 1 FROM public.ld_conversations c WHERE c.opportunity_id=o.id)
               AND NOT EXISTS(SELECT 1 FROM public.ld_evidence e WHERE e.opportunity_id=o.id)
-              AND NOT EXISTS(SELECT 1 FROM public.ld_discovery_results d WHERE d.opportunity_id=o.id)
           )"""),params)
         removed_ops=db.execute(text("""DELETE FROM public.ld_opportunities o
           WHERE o.service_details->>'_letterdesk_import_batch'=:batch
           AND NOT EXISTS(SELECT 1 FROM public.ld_conversations c WHERE c.opportunity_id=o.id)
           AND NOT EXISTS(SELECT 1 FROM public.ld_evidence e WHERE e.opportunity_id=o.id)
-          AND NOT EXISTS(SELECT 1 FROM public.ld_discovery_results d WHERE d.opportunity_id=o.id)
           AND NOT EXISTS(SELECT 1 FROM public.ld_import_rows ir WHERE ir.opportunity_id=o.id)
           RETURNING id"""),params).scalars().all()
 
