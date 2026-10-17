@@ -43,6 +43,8 @@ jobs:
         run: python -m unittest -v tests/test_letterdesk_staging_auth.py
       - name: Letter Desk Phase 3 discovery rules
         run: python -m unittest -v tests/test_letterdesk_discovery.py
+      - name: Letter Desk Phase 3 team and writer guard
+        run: python -m unittest -v tests/test_letterdesk_scout_api.py
 
   web:
     runs-on: ubuntu-latest
