@@ -45,7 +45,7 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
       setImports(data.imports||[])
     }catch(e){setError(e.message)}
   }
-  useEffect(()=>{if(active&&keyValue)history()},[active,keyValue,serviceKey])
+  useEffect(()=>{if(active&&keyValue&&expanded)history()},[active,keyValue,serviceKey,expanded])
 
   function chooseFile(next) {
     setFile(next||null)
