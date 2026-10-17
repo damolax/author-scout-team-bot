@@ -90,6 +90,6 @@ class FlowApiTests(unittest.TestCase):
             self.assertEqual(r.status_code,403)
         r=self.client.post("/api/v2/letterdesk/services/author/flows/00000000-0000-0000-0000-000000000001/publish",
                     headers={"x-author-scout-key":"team-one"},json={})
-        self.assertEqual(r.status_code,405)
+        self.assertEqual(r.status_code,404)  # No publish endpoint exists
 
 if __name__=="__main__":unittest.main()
