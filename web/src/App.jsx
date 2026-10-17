@@ -227,6 +227,9 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
           </button>
 
           <div className="auth-divider"><span>or</span></div>
+          {ENABLE_LETTERDESK_V2 && <p className="login-note" style={{margin:'0 0 14px',textAlign:'left'}}>
+            For the preview, email/password sign-in uses a secure direct connection and works on mobile. Google sign-in may require browser cookie permissions.
+          </p>}
 
           <form className="email-auth-form" onSubmit={(e) => { e.preventDefault(); onEmail(mode, form) }}>
             {signup && <div className="field">
@@ -1295,6 +1298,27 @@ function AppCore() {
     try {
       const email=String(form.email || '').trim().toLowerCase()
       const password=String(form.password || '')
+      if (ENABLE_LETTERDESK_V2) {
+        // The staging BFF returns an application session directly, avoiding
+        // cross-site Neon Auth cookies blocked by many mobile browsers.
+        await waitForBackend(150000, setLoginStatus)
+        setLoginStatus('Verifying your credentials…')
+        const result=await requestWithRetry('/api/v2/letterdesk/auth/email', '', {
+          method:'POST',
+          body:JSON.stringify({mode, email, password, name:String(form.name || '').trim()})
+        }, 2)
+        if (!result?.session) throw new Error('Login succeeded but the preview did not return a session.')
+        setLoginStatus('Opening your service workspaces…')
+        const sessionInfo=await requestWithRetry('/api/v1/session', result.session, {}, 3)
+        localStorage.setItem('authorScoutSession', result.session)
+        localStorage.setItem('authorScoutSessionInfo', JSON.stringify({key:result.session,session:sessionInfo}))
+        setKeyValue(result.session)
+        setSession(sessionInfo)
+        setTab('services')
+        setLoginError('')
+        setLoginStatus('')
+        return
+      }
       const result=mode === 'signup'
         ? await authClient.signUp.email({ email, password, name:String(form.name || '').trim() || email.split('@')[0] })
         : await authClient.signIn.email({ email, password })
