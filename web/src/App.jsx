@@ -222,13 +222,14 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
 
           {error && <div className="alert alert-error">{error}</div>}
 
-          <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
-            <span className="google-g">G</span>{busy && status ? status : 'Continue with Google'}
-          </button>
-
-          <div className="auth-divider"><span>or</span></div>
+          {!ENABLE_LETTERDESK_V2 && <>
+            <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
+              <span className="google-g">G</span>{busy && status ? status : 'Continue with Google'}
+            </button>
+            <div className="auth-divider"><span>or</span></div>
+          </>}
           {ENABLE_LETTERDESK_V2 && <p className="login-note" style={{margin:'0 0 14px',textAlign:'left'}}>
-            For the preview, email/password sign-in uses a secure direct connection and works on mobile. Google sign-in may require browser cookie permissions.
+            Preview access uses email and password. Google sign-in is paused on this staging site until its mobile redirect flow passes testing.
           </p>}
 
           <form className="email-auth-form" onSubmit={(e) => { e.preventDefault(); onEmail(mode, form) }}>
