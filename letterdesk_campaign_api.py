@@ -108,10 +108,10 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
     def list_campaigns(request:Request,service:str):
         team,account,ws=auth_workspace(request,service)
         with engine.connect() as db:
-            rows=db.execute(text("""SELECT CAST(c.id AS TEXT),c.name,c.status,
+            rows=db.execute(text("""SELECT CAST(c.id AS TEXT) AS id,c.name,c.status,
                 CAST(c.sender_identity_id AS TEXT) AS sender_identity_id,
                 s.email AS sender_email,c.max_daily,c.min_interval_seconds,
-                c.send_window_start,c.send_window_end,c.timezone_name,CAST(c.created_at AS TEXT),c.owner_web_account_id,
+                c.send_window_start,c.send_window_end,c.timezone_name,CAST(c.created_at AS TEXT) AS created_at,c.owner_web_account_id,
                 COUNT(q.id) AS queue_total,
                 COUNT(q.id) FILTER(WHERE q.status='approved') AS queue_approved,
                 COUNT(q.id) FILTER(WHERE q.status='sent') AS sent_total
@@ -124,6 +124,32 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
         return {"ok":True,"campaigns":[dict(r) for r in rows],
                 "writes_enabled":writes_on(),
                 "sending_enabled":False} # Controlled release requires Gmail verification and reply sync.
+
+    @router.get("/services/{service}/campaigns/eligible-drafts")
+    def eligible_drafts(request:Request,service:str,limit:int=100):
+        team,account,ws=auth_workspace(request,service)
+        with engine.connect() as db:
+            rows=db.execute(text("""SELECT CAST(m.id AS TEXT) AS id,
+                m.recipient_email,m.subject,LEFT(m.body,140) AS preview,
+                l.name AS prospect_name,o.status AS opportunity_status
+                FROM public.ld_message_records m
+                JOIN public.ld_conversations c ON c.id=m.conversation_id
+                JOIN public.ld_opportunities o ON o.id=c.opportunity_id
+                JOIN public.ld_leads l ON l.id=o.lead_id AND l.team_id=:team
+                WHERE o.workspace_id=CAST(:ws AS uuid)
+                  AND m.status='needs_review'
+                  AND COALESCE(TRIM(m.recipient_email),'')<>''
+                  AND COALESCE(TRIM(m.body),'')<>''
+                  AND c.status NOT IN ('stopped','lost','qualified','won')
+                  AND NOT EXISTS (SELECT 1 FROM public.ld_campaign_queue q
+                      WHERE q.message_record_id=m.id)
+                  AND NOT EXISTS (SELECT 1 FROM public.ld_suppressions s
+                      WHERE s.team_id=:team AND s.normalized_email=lower(m.recipient_email))
+                ORDER BY m.created_at DESC LIMIT :lim"""),{
+                 "team":team,"ws":ws,"lim":max(1,min(int(limit),200))
+             }).mappings().all()
+        return {"ok":True,"drafts":[dict(x) for x in rows],
+                "note":"Drafts require contact-basis review before campaigns can send."}
 
     @router.post("/services/{service}/campaigns")
     async def create_campaign(request:Request,service:str):
@@ -170,9 +196,9 @@ def install_campaign_api(app:FastAPI,engine,authenticate):
                   WHERE id=:campaign AND workspace_id=CAST(:ws AS uuid)"""),{
                     "campaign":campaign_id,"ws":ws}).scalar_one_or_none()
             if not valid:raise HTTPException(404,"Campaign not found")
-            rows=db.execute(text("""SELECT CAST(q.id AS TEXT),CAST(q.message_record_id AS TEXT),q.recipient_email,
-                 q.permission_basis,q.status,CAST(q.scheduled_at AS TEXT),CAST(q.approved_at AS TEXT),
-                 CAST(q.sent_at AS TEXT),q.failure_code
+            rows=db.execute(text("""SELECT CAST(q.id AS TEXT) AS id,CAST(q.message_record_id AS TEXT) AS message_record_id,q.recipient_email,
+                 q.permission_basis,q.status,CAST(q.scheduled_at AS TEXT) AS scheduled_at,CAST(q.approved_at AS TEXT) AS approved_at,
+                 CAST(q.sent_at AS TEXT) AS sent_at,q.failure_code
                  FROM public.ld_campaign_queue q WHERE q.campaign_id=:id
                  ORDER BY q.created_at DESC LIMIT 200"""),{"id":campaign_id}).mappings().all()
         return {"ok":True,"queue":[dict(r) for r in rows]}
