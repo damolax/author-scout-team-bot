@@ -88,7 +88,7 @@ def ingest_reply(engine,team,workspace,conversation_id,sender,body,
         if not row:raise HTTPException(404,"Conversation was not found in this service")
         _recipient_proof(db,row,address)
         if row["status"] in ("lost","stopped"):
-            raise HTTPException(409,"Conversation was already stopped")
+            return {"created":False,"reason":"conversation_stopped","outcome":"opt_out"}
         if source=="gmail_thread":
             if not provider_message_id or not gmail_connection_id or not campaign_queue_id:
                 raise HTTPException(400,"Gmail replies require verified provider message and queue link")
