@@ -12,7 +12,7 @@ export default function ScoutingStudio({serviceKey,keyValue,request,active}) {
   const [plan,setPlan]=useState([])
   const [observables,setObservables]=useState([])
   const [jobs,setJobs]=useState([])
-  const [open,setOpen]=useState(true)
+  const [open,setOpen]=useState(false)
   const [busy,setBusy]=useState('')
   const [message,setMessage]=useState('')
   const [error,setError]=useState('')
@@ -28,7 +28,7 @@ export default function ScoutingStudio({serviceKey,keyValue,request,active}) {
   },[serviceKey])
 
   useEffect(()=>{
-    if(!active||!keyValue)return
+    if(!active||!keyValue||!open)return
     let cancelled=false
     const params=new URLSearchParams({niche,city,country,signals})
     const timer=setTimeout(()=>{
@@ -37,7 +37,7 @@ export default function ScoutingStudio({serviceKey,keyValue,request,active}) {
         .catch(e=>{if(!cancelled)setError(e.message||'Cannot prepare queries')})
     },350)
     return()=>{cancelled=true;clearTimeout(timer)}
-  },[active,keyValue,request,serviceKey,niche,city,country,signals])
+  },[active,keyValue,request,serviceKey,niche,city,country,signals,open])
 
   async function loadJobs(){
     if(!active||!keyValue)return
@@ -46,12 +46,12 @@ export default function ScoutingStudio({serviceKey,keyValue,request,active}) {
       setJobs(response.jobs||[])
     }catch(e){setError(e.message||'Jobs unavailable')}
   }
-  useEffect(()=>{if(active&&keyValue)loadJobs()},[active,keyValue,serviceKey])
+  useEffect(()=>{if(active&&keyValue&&open)loadJobs()},[active,keyValue,serviceKey,open])
   useEffect(()=>{
-    if(!active||!keyValue||!canRun||!jobs.some(x=>x.status==='running'||x.status==='queued'))return undefined
+    if(!active||!keyValue||!open||!canRun||!jobs.some(x=>x.status==='running'||x.status==='queued'))return undefined
     const timer=setInterval(()=>loadJobs(),7000)
     return ()=>clearInterval(timer)
-  },[active,keyValue,canRun,serviceKey,jobs.map(x=>x.status).join(',')])
+  },[active,keyValue,canRun,serviceKey,open,jobs.map(x=>x.status).join(',')])
 
   async function createJob(){
     if(!canRun)return
