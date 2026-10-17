@@ -69,6 +69,18 @@ def inspect(db,batch):
     replies=int(db.execute(text("""SELECT count(*) FROM public.ld_reply_inbox
         WHERE conversation_id=ANY(CAST(:ids AS uuid[]))"""),{"ids":cids}).scalar_one()) if cids else 0
     unsafe_status=sum(m["status"]!="needs_review" for m in messages)
+    # Protect manual edits to imported drafts: never discard modified body or
+    # subject in an "undo unused" action, even if still marked needs_review.
+    revised=db.execute(text("""SELECT count(*) FROM public.ld_message_records m
+        JOIN public.ld_conversations c ON c.id=m.conversation_id
+        JOIN public.ld_import_rows ir ON ir.opportunity_id=c.opportunity_id
+        JOIN public.ld_import_batches b ON b.id=ir.batch_id
+        WHERE m.raw_metadata->>'import_batch'=:batch
+          AND b.id=CAST(:batch AS uuid) AND (
+            m.body IS DISTINCT FROM (ir.branch_templates->>'Message01') OR
+            m.subject IS DISTINCT FROM COALESCE(ir.branch_templates->>'_draft_subject','')
+          )"""),{"batch":bid}).scalar_one()
+    unsafe_status+=int(revised or 0)
     conversations=db.execute(text("""SELECT CAST(c.id AS TEXT) AS id,c.status,c.message_count,c.legacy_message_id
        FROM public.ld_conversations c
        WHERE c.id=ANY(CAST(:ids AS uuid[]))"""),{"ids":cids}).mappings().all() if cids else []
