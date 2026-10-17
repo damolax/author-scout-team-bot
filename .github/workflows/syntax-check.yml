@@ -41,6 +41,8 @@ jobs:
         run: LETTERDESK_STAGING_ISOLATED=true LETTERDESK_V2_ENABLED=true python -m unittest -v tests/test_letterdesk_staging_guard.py
       - name: Letter Desk first-party login bridge safety
         run: python -m unittest -v tests/test_letterdesk_staging_auth.py
+      - name: Letter Desk Phase 3 discovery rules
+        run: python -m unittest -v tests/test_letterdesk_discovery.py
 
   web:
     runs-on: ubuntu-latest
