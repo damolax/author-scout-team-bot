@@ -3870,6 +3870,12 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             and path.endswith("/imports/confirm")
             and os.getenv("LETTERDESK_IMPORT_WRITE_ENABLED", "false").lower() in ("true", "1", "yes")
         )
+        import_undo_allowed = (
+            request.method == "POST"
+            and path.startswith("/api/v2/letterdesk/services/")
+            and "/imports/" in path and path.endswith("/undo")
+            and os.getenv("LETTERDESK_IMPORT_UNDO_ENABLED", "false").lower() in ("true","1","yes")
+        )
         # Conversation flows: validation/simulation are read-only POSTs. Template
         # saves require their own staging flag and cannot access sending routes.
         is_flow_path = (
@@ -3893,6 +3899,6 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             and (path.endswith("/scout/jobs") or
                  ("/scout/jobs/" in path and path.endswith("/run")))
         )
-        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write or reply_preview or reply_write)) or flow_write:
+        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or import_undo_allowed or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write or reply_preview or reply_write)) or flow_write:
             return await call_next(request)
         return JSONResponse({"detail": "This preview is read-only. Sending, scraping and mutating operations are disabled."}, status_code=403)
