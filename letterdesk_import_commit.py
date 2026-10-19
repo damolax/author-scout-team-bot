@@ -86,7 +86,7 @@ def save_confirmed_import(engine,team,service,filename,sha,parsed,rows,summary):
                 jsonb_build_object('_letterdesk_import_batch',:batch)
          FROM src JOIN public.ld_leads l ON l.team_id=:team AND l.dedupe_key=src.key
          ON CONFLICT(workspace_id,lead_id) DO NOTHING"""),{
-          "input":json.dumps(packed),"ws":workspace,"team":team
+          "input":json.dumps(packed),"ws":workspace,"team":team,"batch":batch
         })
 
         # Existing conversations are never overridden or marked unsent again.
