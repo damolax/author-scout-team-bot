@@ -73,14 +73,6 @@ def begin_job(engine,team,workspace,account,filename,size,sha):
     if count>MAX_PARTS:raise HTTPException(413,"Too many chunks")
     with engine.begin() as db:
         db.execute(text("SELECT pg_advisory_xact_lock(:team)"),{"team":int(team)})
-        active=db.execute(text("""SELECT count(*) AS active_count,
-                   COALESCE(sum(bytes_total),0) AS active_bytes
-                FROM public.ld_bulk_upload_jobs
-                WHERE team_id=:team AND owner_account_id=:account
-                  AND status IN ('uploading','previewing','ready','queued','processing')"""),{
-                    "team":team,"account":account}).mappings().one()
-        if active["active_count"]>=5 or active["active_bytes"]+size>192*1024*1024:
-            raise HTTPException(429,"Finish existing uploads before staging more large files")
         old=db.execute(text("""SELECT id::text,status,owner_account_id FROM public.ld_bulk_upload_jobs
             WHERE workspace_id=CAST(:ws AS uuid) AND team_id=:team AND sha256=:sha"""),
             {"team":team,"ws":workspace,"sha":sha}).mappings().first()
@@ -97,6 +89,14 @@ def begin_job(engine,team,workspace,account,filename,size,sha):
             return {"id":old["id"],"chunk_bytes":PART_BYTES,"parts":count,
                     "status":"uploading" if old["status"]=="failed" else old["status"],
                     "already_exists":True}
+        active=db.execute(text("""SELECT count(*) AS active_count,
+                   COALESCE(sum(bytes_total),0) AS active_bytes
+                FROM public.ld_bulk_upload_jobs
+                WHERE team_id=:team AND owner_account_id=:account
+                  AND status IN ('uploading','previewing','ready','queued','processing')"""),{
+                    "team":team,"account":account}).mappings().one()
+        if active["active_count"]>=5 or active["active_bytes"]+size>192*1024*1024:
+            raise HTTPException(429,"Finish existing uploads before staging more large files")
         jid=db.execute(text("""INSERT INTO public.ld_bulk_upload_jobs
             (workspace_id,team_id,owner_account_id,filename,bytes_total,part_size,
              part_count,sha256,status)
