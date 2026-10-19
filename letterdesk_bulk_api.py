@@ -37,6 +37,26 @@ def install_bulk_import_api(app:FastAPI,engine,authenticate):
         if row is None:raise HTTPException(404,"Upload job not found for your account and service")
         return dict(row)
 
+    @router.get("/services/{service}/bulk-uploads/capabilities")
+    def capabilities(request:Request,service:str):
+        auth(request,service)
+        # Report readiness without returning any OAuth/encryption/signing key.
+        from letterdesk_bulk_import import signing_key,PART_BYTES,MAX_BYTES
+        from letterdesk_gmail_api import sender_crypto
+        crypto_ready=True
+        signature_ready=True
+        try:sender_crypto()
+        except Exception:crypto_ready=False
+        try:signing_key()
+        except Exception:signature_ready=False
+        return {"ok":True,"enabled":staging_enabled(),
+                "can_stage_files":staging_enabled() and crypto_ready and signature_ready,
+                "can_import_contacts":writes_enabled(),
+                "encryption_ready":crypto_ready,"signing_ready":signature_ready,
+                "max_rows":50000,"max_bytes":MAX_BYTES,
+                "chunk_bytes":PART_BYTES,
+                "message_sending_enabled":False}
+
     @router.get("/services/{service}/bulk-uploads")
     def history(request:Request,service:str):
         team,account,ws=auth(request,service)
