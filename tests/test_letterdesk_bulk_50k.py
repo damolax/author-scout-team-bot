@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from openpyxl import Workbook
-from letterdesk_service_import import iter_service_chunks,MAX_ROWS,MAX_BYTES
+from letterdesk_service_import import iter_service_chunks,MAX_BULK_ROWS,MAX_BYTES
 from letterdesk_bulk_import import checksum_token,verify_checksum,staging_enabled,writes_enabled,PART_BYTES
 
 class Bulk50KTests(unittest.TestCase):
@@ -79,7 +79,7 @@ class Bulk50KTests(unittest.TestCase):
             self.assertFalse(staging_enabled())
             self.assertFalse(writes_enabled())
         self.assertEqual(PART_BYTES,1048576)
-        self.assertEqual(MAX_ROWS,50000)
+        self.assertEqual(MAX_BULK_ROWS,50000)
         self.assertEqual(MAX_BYTES,67108864)
 
 if __name__=="__main__":unittest.main()
