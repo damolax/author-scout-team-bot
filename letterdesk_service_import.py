@@ -223,14 +223,17 @@ def iter_service_chunks(data,filename,service,chunk_size=500):
         while True:
             section=list(islice(source,chunk_size))
             if not section:return
-            count+=len(section)
+            # Blank spreadsheet formatting rows do not count as prospects.
+            # Preserve absolute row positions even when there are blanks.
+            valid_rows=sum(1 for row in section if any(clean_cell(v) for v in row))
+            count+=valid_rows
             if count>MAX_ROWS:
-                raise ValueError("Maximum 50,000 records per upload")
-            # The absolute file line index is preserved in import audit.
+                raise ValueError("Maximum 50,000 nonempty records per upload")
             part=_process_table(name,idx,head,cols,branches,section,service,
                                 first_row=start,seen=seen)
             start+=len(section)
-            yield part
+            if part["rows"] or part["issues"]:
+                yield part
     if filename.endswith(".csv"):
         try:
             with io.BytesIO(data) as stream:
@@ -259,8 +262,6 @@ def iter_service_chunks(data,filename,service,chunk_size=500):
                 first=list(islice(sheet.iter_rows(values_only=True),20))
                 idx,cols,branches=_find_sheet(first,service)
                 if idx is None:continue
-                if sheet.max_row and sheet.max_row>MAX_ROWS+idx+1:
-                    raise ValueError("Maximum 50,000 records per upload")
                 yield from consume(sheet.title,idx,first[idx],cols,branches,
                     sheet.iter_rows(min_row=idx+2,values_only=True))
                 return
