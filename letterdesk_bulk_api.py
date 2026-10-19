@@ -82,7 +82,7 @@ def install_bulk_import_api(app:FastAPI,engine,authenticate):
                                                            job["preview_summary"])
         return {"ok":True,**payload}
 
-    @router.put("/services/{service}/bulk-uploads/{job_id}/parts/{index}")
+    @router.post("/services/{service}/bulk-uploads/{job_id}/parts/{index}")
     async def put_chunk(request:Request,service:str,job_id:UUID,index:int):
         team,account,ws=auth(request,service)
         if not staging_enabled():raise HTTPException(403,"Large-file staging is disabled")
