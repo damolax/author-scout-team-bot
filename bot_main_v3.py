@@ -3751,6 +3751,16 @@ async def letterdesk_reply_startup():
 
 
 @app.on_event("startup")
+async def letterdesk_bulk_upload_startup():
+    if os.getenv("LETTERDESK_V2_ENABLED", "false").lower() not in ("true","1","yes"):
+        return
+    from letterdesk_bulk_import import staging_enabled, job_loop
+    if staging_enabled():
+        app.state.ld_bulk_import_worker = asyncio.create_task(job_loop(legacy.engine))
+        print("LETTERDESK_BULK_FILE_WORKER started")
+
+
+@app.on_event("startup")
 async def letterdesk_campaign_startup():
     # Never start a delivery worker in isolated staging, even when draft
     # editing and OAuth account connections are enabled for QA.
@@ -3765,7 +3775,7 @@ async def letterdesk_campaign_startup():
 @app.on_event("shutdown")
 async def connection_shutdown():
     global _http_client
-    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker","ld_scout_worker","ld_delivery_worker","ld_reply_worker"):
+    for task_name in ("connection_worker","source_index_worker","web_research_worker","ai_research_worker","ld_scout_worker","ld_delivery_worker","ld_reply_worker","ld_bulk_import_worker"):
         task = getattr(app.state, task_name, None)
         if task:
             task.cancel()
@@ -3790,6 +3800,8 @@ if os.getenv("LETTERDESK_V2_ENABLED", "false").strip().lower() in {"true", "1", 
     install_scouting_api(app, legacy.engine, _web_auth)
     from letterdesk_import_api import install_import_api
     install_import_api(app, legacy.engine, _web_auth)
+    from letterdesk_bulk_api import install_bulk_import_api
+    install_bulk_import_api(app, legacy.engine, _web_auth)
     from letterdesk_flow_api import install_flow_api
     install_flow_api(app, legacy.engine, _web_auth)
     from letterdesk_gmail_api import install_gmail_connection_api
@@ -3860,6 +3872,14 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
                 or path.endswith("/flow")
             )
         )
+        bulk_uploads_allowed=(
+            path.startswith("/api/v2/letterdesk/services/")
+            and "/bulk-uploads" in path
+            and (
+                (request.method in ("POST","PUT")
+                   and os.getenv("LETTERDESK_BULK_UPLOAD_ENABLED","false").lower() in ("true","yes","1"))
+            )
+        )
         # File previews are read-only; confirmations are separately feature-gated.
         allow_import_preview = (
             request.method == "POST" and path.startswith("/api/v2/letterdesk/services/")
@@ -3899,6 +3919,6 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             and (path.endswith("/scout/jobs") or
                  ("/scout/jobs/" in path and path.endswith("/run")))
         )
-        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or import_undo_allowed or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write or reply_preview or reply_write)) or flow_write:
+        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or import_undo_allowed or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write or reply_preview or reply_write)) or bulk_uploads_allowed or flow_write:
             return await call_next(request)
         return JSONResponse({"detail": "This preview is read-only. Sending, scraping and mutating operations are disabled."}, status_code=403)
