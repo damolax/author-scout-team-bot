@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react'
 import './import-studio.css'
+import BulkUploadStudio from './BulkUploadStudio.jsx'
 
 const MAX_FILE_BYTES=8*1024*1024
 const API=(import.meta.env.VITE_API_BASE_URL||'https://author-scout-team-bot.onrender.com').replace(/\/$/,'')
@@ -152,6 +153,7 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
     </div>
 
     {expanded&&<div className="ld-import-content">
+      <BulkUploadStudio serviceKey={serviceKey} keyValue={keyValue} active={active} onImported={onImported} />
       <div className="ld-import-guidance">
         <strong>What your file can include</strong>
         <p>Prospect name plus email or website; service-specific research fields; source URL; optional subject,
@@ -160,7 +162,7 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
       </div>
 
       <div className="ld-import-file">
-        <label htmlFor={'ld-import-'+serviceKey}>Choose an Excel or CSV file (maximum 8 MB, 5,000 records)</label>
+        <label htmlFor={'ld-import-'+serviceKey}>Standard import (up to 5,000 records, 8 MB). For 10,000–50,000 use Bulk upload above.</label>
         <input ref={fileRef} id={'ld-import-'+serviceKey} type="file" accept=".csv,.xlsx,.xlsm,text/csv" onChange={e=>chooseFile(e.target.files?.[0]||null)} />
         <button disabled={!file||busy||Boolean(error)} type="button" onClick={previewFile}>
           {busy==='preview'?'Validating file…':'Preview and check duplicates'}
