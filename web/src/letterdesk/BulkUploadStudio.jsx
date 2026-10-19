@@ -33,6 +33,7 @@ export default function BulkUploadStudio({serviceKey,keyValue,active,onImported}
   const [file,setFile]=useState(null)
   const [job,setJob]=useState(null)
   const [jobs,setJobs]=useState([])
+  const [capabilities,setCapabilities]=useState(null)
   const [busy,setBusy]=useState('')
   const [error,setError]=useState('')
   const [note,setNote]=useState('')
@@ -46,8 +47,15 @@ export default function BulkUploadStudio({serviceKey,keyValue,active,onImported}
   async function refreshJobs(){
     if(!active||!keyValue||!expanded)return
     try{
-      const result=await api(prefix,keyValue)
+      const [result,health]=await Promise.all([
+        api(prefix,keyValue),
+        api(prefix+'/capabilities',keyValue)
+      ])
+      setCapabilities(health)
       setJobs(result.jobs||[])
+      if(result.enabled&&!health.can_stage_files){
+        setError('Bulk file staging needs the server encryption and signing keys. Ask the workspace administrator to finish setup.')
+      }
       if(!result.enabled)setNote('Large-file uploads have not been enabled on this protected staging server.')
     }catch(e){setError(e.message)}
   }
@@ -66,7 +74,7 @@ export default function BulkUploadStudio({serviceKey,keyValue,active,onImported}
   useEffect(()=>{
     stopped.current=false
     setFile(null);setJob(null);setStageProgress(0);setError('');setNote('')
-    setExpanded(false);setConfirmed(false);setJobs([])
+    setExpanded(false);setConfirmed(false);setJobs([]);setCapabilities(null)
     return()=>{stopped.current=true}
   },[serviceKey])
   useEffect(()=>{if(active&&keyValue&&expanded)refreshJobs()},[active,keyValue,serviceKey,expanded])
@@ -90,7 +98,7 @@ export default function BulkUploadStudio({serviceKey,keyValue,active,onImported}
   },[expanded,active,activeJob,job?.status,keyValue,serviceKey])
 
   async function upload(){
-    if(!file||busy)return
+    if(!file||busy||!capabilities?.can_stage_files)return
     setBusy('upload');setError('');setNote('Computing file fingerprint…');setConfirmed(false)
     try{
       if(file.size>MAX_BYTES)throw new Error('The maximum file size is 64 MB.')
@@ -167,6 +175,11 @@ export default function BulkUploadStudio({serviceKey,keyValue,active,onImported}
         {expanded?'Hide bulk uploader ↑':'Open bulk uploader ↓'}</button>
     </div>
     {expanded&&<div className="ld-bulk-content">
+      {capabilities&&!capabilities.can_stage_files&&<p className="ld-bulk-locked">
+        {capabilities.enabled
+          ? 'Upload staging is enabled, but server encryption or signing configuration is not ready.'
+          : 'The staging upload service is not enabled yet.'}
+      </p>}
       <label>Select CSV or Excel (maximum 64 MB, 50,000 records)
         <input type="file" accept=".csv,.xlsx,.xlsm" onChange={e=>{
           const chosen=e.target.files?.[0]||null
@@ -174,7 +187,7 @@ export default function BulkUploadStudio({serviceKey,keyValue,active,onImported}
           if(chosen&&chosen.size>MAX_BYTES)setError('The maximum supported file size is 64 MB.')
         }}/></label>
       <button type="button" className="ld-bulk-primary" onClick={upload}
-        disabled={!file||Boolean(busy)||(file.size>MAX_BYTES)}>
+        disabled={!file||Boolean(busy)||(file.size>MAX_BYTES)||!capabilities?.can_stage_files}>
         {busy==='upload'?'Uploading / verifying…':'Upload and preview in background'}</button>
       {busy==='upload'&&<div className="ld-bulk-progress"><span>Transferring encrypted chunks · {stageProgress}%</span>
         <progress max="100" value={stageProgress}/></div>}
