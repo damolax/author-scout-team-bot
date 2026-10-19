@@ -1178,14 +1178,15 @@ function Connections({ keyValue, active }) {
   )
 }
 
-const NAV = [
-  ...(ENABLE_LETTERDESK_V2 ? [['services','Service Workspaces','◈']] : []),
-  ['dashboard','Overview','⌂'],
-  ['research','Scout','⌕'],
-  ['authors','Authors','A'],
-  ['messages','Letterdesk','✉'],
-  ['connections','Connections','↗'],
-]
+const NAV = ENABLE_LETTERDESK_V2
+  ? [['services','Service Workspaces','◈']]
+  : [
+      ['dashboard','Overview','⌂'],
+      ['research','Scout','⌕'],
+      ['authors','Authors','A'],
+      ['messages','Letterdesk','✉'],
+      ['connections','Connections','↗'],
+    ]
 
 function AppCore() {
   useEffect(() => { if (ENABLE_LETTERDESK_V2) { document.title = 'Letter Desk — Unified Scouting'; const description = document.querySelector('meta[name="description"]'); if (description) description.setAttribute('content', 'Letter Desk — six specialized prospect research and outreach workspaces.') } }, [])
@@ -1202,7 +1203,7 @@ function AppCore() {
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
   const [loginStatus, setLoginStatus] = useState('')
-  const [tab, setTab] = useState(() => { const requested = new URLSearchParams(window.location.search).get('tab'); return requested === 'messages' ? 'messages' : ENABLE_LETTERDESK_V2 && requested !== 'dashboard' ? 'services' : 'dashboard' })
+  const [tab, setTab] = useState(() => { const requested = new URLSearchParams(window.location.search).get('tab'); return ENABLE_LETTERDESK_V2 ? 'services' : (requested === 'messages' ? 'messages' : 'dashboard') })
 
   const verify = useCallback(async (rawKey) => {
     const epoch=authEpoch.current
@@ -1507,24 +1508,24 @@ function AppCore() {
         </div>
 
         <main>
-          <div className={tab === 'dashboard' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'dashboard'}>
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'dashboard' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'dashboard'}>
             <Dashboard keyValue={keyValue} session={session} active={tab === 'dashboard'} />
-          </div>
+          </div>}
           {ENABLE_LETTERDESK_V2 && <div className={tab === 'services' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'services'}>
             <ServiceDashboard active={tab === 'services'} keyValue={keyValue} request={request} />
           </div>}
-          <div className={tab === 'research' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'research'}>
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'research' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'research'}>
             <Research keyValue={keyValue} active={tab === 'research'} />
-          </div>
-          <div className={tab === 'authors' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'authors'}>
+          </div>}
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'authors' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'authors'}>
             <Authors keyValue={keyValue} active={tab === 'authors'} />
-          </div>
-          <div className={tab === 'messages' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'messages'}>
+          </div>}
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'messages' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'messages'}>
             <Letterdesk keyValue={keyValue} active={tab === 'messages'} request={request} apiBase={API_BASE} displayName={session?.account?.display_name || ''} />
-          </div>
-          <div className={tab === 'connections' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'connections'}>
+          </div>}
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'connections' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'connections'}>
             <Connections keyValue={keyValue} active={tab === 'connections'} />
-          </div>
+          </div>}
         </main>
       </div>
     </div>
