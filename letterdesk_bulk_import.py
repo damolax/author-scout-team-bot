@@ -158,8 +158,15 @@ def finish_staging(engine,job_id,team,workspace,account):
         if job["owner_account_id"]!=account:raise HTTPException(403,"Only upload owner may complete it")
         if job["status"] in ("ready","previewing"):return {"status":job["status"]}
         if job["status"]!="uploading":raise HTTPException(409,"Upload is no longer modifiable")
-        # Verify every chunk + SHA before queuing an asynchronous preview.
-        load_bytes(db,job)
+        # Do the cheap part-count/size check in the HTTP request.
+        # Full Fernet decryption and whole-file SHA run in the background;
+        # otherwise a 64 MiB Excel file could time out the browser.
+        totals=db.execute(text("""SELECT count(*) AS count,
+                      COALESCE(sum(size_bytes),0) AS bytes
+             FROM public.ld_bulk_upload_parts WHERE job_id=:id"""),{
+                 "id":job_id}).mappings().one()
+        if totals["count"]!=job["part_count"] or totals["bytes"]!=job["bytes_total"]:
+            raise HTTPException(409,"Upload is incomplete. Resume the missing chunks.")
         db.execute(text("""UPDATE public.ld_bulk_upload_jobs SET status='previewing',
               lease_expires_at=NULL,updated_at=now() WHERE id=:job"""),{"job":job_id})
     return {"status":"previewing","message":"Preview is being checked in background"}
