@@ -73,10 +73,12 @@ def begin_job(engine,team,workspace,account,filename,size,sha):
     if count>MAX_PARTS:raise HTTPException(413,"Too many chunks")
     with engine.begin() as db:
         db.execute(text("SELECT pg_advisory_xact_lock(:team)"),{"team":int(team)})
-        old=db.execute(text("""SELECT id::text,status FROM public.ld_bulk_upload_jobs
+        old=db.execute(text("""SELECT id::text,status,owner_account_id FROM public.ld_bulk_upload_jobs
             WHERE workspace_id=CAST(:ws AS uuid) AND team_id=:team AND sha256=:sha"""),
             {"team":team,"ws":workspace,"sha":sha}).mappings().first()
         if old:
+            if old["owner_account_id"]!=account:
+                raise HTTPException(409,"Another team member owns this uploaded file")
             if old["status"] in ("completed","processing","queued"):
                 raise HTTPException(409,"This file is already imported or being processed in this service")
             if old["status"]=="failed":
@@ -201,8 +203,8 @@ def preview_worker(engine,job):
         raw=load_bytes(db,job)
     summary={s:0 for s in ("created","linked","suppressed","invalid","skipped_duplicate","rows_total","first_message_drafts","branch_sets")}
     sample=[];index=0;first=None
-    for partial in iter_service_chunks(raw,job["filename"],job["workspace_id"] if False else job["_service"],ROWS_PER_TX):
-        if not first:first=partial
+    for partial in iter_service_chunks(raw,job["filename"],job["_service"],ROWS_PER_TX):
+        if first is None:first=partial
         rows,stats=plan(engine,job["team_id"],job["_service"],partial)
         for key in summary:summary[key]+=stats.get(key,0)
         for row in rows[:max(0,25-len(sample))]:
@@ -214,7 +216,7 @@ def preview_worker(engine,job):
                 processed_parts=:parts,processed_rows=:rows,
                 lease_expires_at=now()+interval '60 minutes',updated_at=now()
                 WHERE id=:job"""),{"job":job["id"],"parts":index,"rows":summary["rows_total"]})
-    if not first or summary["rows_total"]==0:
+    if first is None or summary["rows_total"]==0:
         raise ValueError("No nonempty prospect rows found")
     with engine.begin() as db:
         db.execute(text("""UPDATE public.ld_bulk_upload_jobs SET
