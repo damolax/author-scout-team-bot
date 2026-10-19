@@ -73,6 +73,14 @@ def begin_job(engine,team,workspace,account,filename,size,sha):
     if count>MAX_PARTS:raise HTTPException(413,"Too many chunks")
     with engine.begin() as db:
         db.execute(text("SELECT pg_advisory_xact_lock(:team)"),{"team":int(team)})
+        active=db.execute(text("""SELECT count(*) AS active_count,
+                   COALESCE(sum(bytes_total),0) AS active_bytes
+                FROM public.ld_bulk_upload_jobs
+                WHERE team_id=:team AND owner_account_id=:account
+                  AND status IN ('uploading','previewing','ready','queued','processing')"""),{
+                    "team":team,"account":account}).mappings().one()
+        if active["active_count"]>=5 or active["active_bytes"]+size>192*1024*1024:
+            raise HTTPException(429,"Finish existing uploads before staging more large files")
         old=db.execute(text("""SELECT id::text,status,owner_account_id FROM public.ld_bulk_upload_jobs
             WHERE workspace_id=CAST(:ws AS uuid) AND team_id=:team AND sha256=:sha"""),
             {"team":team,"ws":workspace,"sha":sha}).mappings().first()
@@ -269,6 +277,24 @@ def commit_worker(engine,job):
         # rows retain their own evidence and review drafts as intended.
         db.execute(text("DELETE FROM public.ld_bulk_upload_parts WHERE job_id=:job"),{"job":job["id"]})
 
+def purge_stale_uploads(engine):
+    """Expire abandoned encrypted uploads after seven days.
+
+    Preserve job audit metadata but never retain raw file chunks indefinitely.
+    Only idle/stale uploads are eligible; processing and completed jobs are excluded.
+    """
+    with engine.begin() as db:
+        expired=db.execute(text("""UPDATE public.ld_bulk_upload_jobs
+             SET status='cancelled',updated_at=now(),
+               last_error='upload_expired' WHERE
+             status IN ('uploading','ready','failed')
+             AND updated_at<now()-interval '7 days'
+             RETURNING id""")).scalars().all()
+        if expired:
+            db.execute(text("""DELETE FROM public.ld_bulk_upload_parts
+                WHERE job_id=ANY(:jobs)"""),{"jobs":expired})
+    return len(expired)
+
 def job_once(engine):
     if not staging_enabled():return {"status":"disabled"}
     job=claim_job(engine)
@@ -289,7 +315,11 @@ def job_once(engine):
         return {"status":"failed","error":type(error).__name__}
 
 async def job_loop(engine,interval=5):
+    cycle=0
     while staging_enabled():
+        cycle+=1
+        if cycle%120==1:
+            await asyncio.to_thread(purge_stale_uploads,engine)
         try:
             # File parsing and PostgreSQL chunk writes can take several seconds;
             # offload to a thread so login and status APIs remain responsive.
