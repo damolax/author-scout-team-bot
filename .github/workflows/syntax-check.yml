@@ -67,6 +67,8 @@ jobs:
         run: python -m unittest -v tests/test_letterdesk_phase8_reliability.py
       - name: Letter Desk 50k streaming CSV and Excel regression
         run: python -m unittest -v tests/test_letterdesk_bulk_50k.py
+      - name: Letter Desk 50k API signed-in isolation
+        run: python -m unittest -v tests/test_letterdesk_bulk_api.py
 
   web:
     runs-on: ubuntu-latest
