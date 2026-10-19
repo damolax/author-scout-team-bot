@@ -15,7 +15,8 @@ from openpyxl import load_workbook
 
 MAX_BYTES = 64 * 1024 * 1024
 MAX_UNCOMPRESSED = 192 * 1024 * 1024
-MAX_ROWS = 50000
+MAX_ROWS = 5000
+MAX_BULK_ROWS = 50000
 MAX_COLUMNS = 150
 MAX_CELL_LENGTH = 30000
 
@@ -107,7 +108,7 @@ def _process_table(name,header_idx,header,columns,branches,iterator,service,*,fi
     if seen is None:seen=set()
     for number,raw in enumerate(iterator,start=first_row if first_row is not None else header_idx+2):
         if not any(clean_cell(x) for x in raw):continue
-        if len(items)+len(errors)>=MAX_ROWS:raise ValueError("Maximum 50,000 nonempty records per upload.")
+        if len(items)+len(errors)>=MAX_ROWS:raise ValueError("Maximum 5,000 nonempty records in a standard import; use Bulk upload for up to 50,000.")
         def read(key):
             i=columns.get(key)
             return clean_cell(raw[i]) if i is not None and i<len(raw) else ""
@@ -189,7 +190,7 @@ def parse_service_upload(data,filename,service):
                 idx,cols,branches=_find_sheet(first,service)
                 if idx is None:continue
                 # If a spreadsheet contains >5000 rows, don't silently accept a partial import.
-                if sheet.max_row and sheet.max_row>MAX_ROWS+idx+1:raise ValueError("Maximum 50,000 records per upload")
+                if sheet.max_row and sheet.max_row>MAX_ROWS+idx+1:raise ValueError("Maximum 5,000 records per standard import; use Bulk upload for up to 50,000.")
                 remaining=sheet.iter_rows(min_row=idx+2,values_only=True)
                 return _process_table(sheet.title,idx,first[idx],cols,branches,remaining,service)
         finally:book.close()
@@ -227,7 +228,7 @@ def iter_service_chunks(data,filename,service,chunk_size=500):
             # Preserve absolute row positions even when there are blanks.
             valid_rows=sum(1 for row in section if any(clean_cell(v) for v in row))
             count+=valid_rows
-            if count>MAX_ROWS:
+            if count>MAX_BULK_ROWS:
                 raise ValueError("Maximum 50,000 nonempty records per upload")
             part=_process_table(name,idx,head,cols,branches,section,service,
                                 first_row=start,seen=seen)
