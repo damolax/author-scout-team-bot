@@ -13,9 +13,9 @@ from urllib.parse import urlparse
 
 from openpyxl import load_workbook
 
-MAX_BYTES = 8 * 1024 * 1024
-MAX_UNCOMPRESSED = 36 * 1024 * 1024
-MAX_ROWS = 5000
+MAX_BYTES = 64 * 1024 * 1024
+MAX_UNCOMPRESSED = 192 * 1024 * 1024
+MAX_ROWS = 50000
 MAX_COLUMNS = 150
 MAX_CELL_LENGTH = 30000
 
@@ -102,11 +102,12 @@ def _find_sheet(rows,service):
             return i,cols,branches
     return None,None,None
 
-def _process_table(name,header_idx,header,columns,branches,iterator,service):
-    items=[];errors=[];seen=set()
-    for number,raw in enumerate(iterator,start=header_idx+2):
+def _process_table(name,header_idx,header,columns,branches,iterator,service,*,first_row=None,seen=None):
+    items=[];errors=[]
+    if seen is None:seen=set()
+    for number,raw in enumerate(iterator,start=first_row if first_row is not None else header_idx+2):
         if not any(clean_cell(x) for x in raw):continue
-        if len(items)+len(errors)>=MAX_ROWS:raise ValueError("Maximum 5,000 nonempty records per upload.")
+        if len(items)+len(errors)>=MAX_ROWS:raise ValueError("Maximum 50,000 nonempty records per upload.")
         def read(key):
             i=columns.get(key)
             return clean_cell(raw[i]) if i is not None and i<len(raw) else ""
@@ -161,16 +162,16 @@ def _process_table(name,header_idx,header,columns,branches,iterator,service):
 
 def parse_service_upload(data,filename,service):
     if service not in SERVICES:raise ValueError("Unsupported Letter Desk service")
-    if not isinstance(data,bytes) or len(data)>MAX_BYTES:raise ValueError("Workbook exceeds 8 MB.")
+    if not isinstance(data,bytes) or len(data)>MAX_BYTES:raise ValueError("Workbook exceeds 64 MB.")
     lower=str(filename or "").lower()
     if lower.endswith(".csv"):
         try:
-            reader=csv.reader(io.StringIO(data.decode("utf-8-sig"),newline=""))
+            reader=csv.reader(io.TextIOWrapper(io.BytesIO(data),encoding="utf-8-sig",newline=""))
             head=list(islice(reader,20))
             idx,cols,branches=_find_sheet(head,service)
             if idx is None:raise ValueError("No recognizable prospect headings in CSV")
             return _process_table("CSV",idx,head[idx],cols,branches,
-                iter(head[idx+1:]+list(islice(reader,MAX_ROWS+2))),service)
+                __import__('itertools').chain(head[idx+1:],reader),service)
         except (UnicodeDecodeError,csv.Error) as e:
             raise ValueError("Invalid CSV file") from e
     if not lower.endswith((".xlsx",".xlsm")):raise ValueError("Upload an .xlsx, .xlsm or .csv file.")
@@ -188,8 +189,8 @@ def parse_service_upload(data,filename,service):
                 idx,cols,branches=_find_sheet(first,service)
                 if idx is None:continue
                 # If a spreadsheet contains >5000 rows, don't silently accept a partial import.
-                if sheet.max_row and sheet.max_row>MAX_ROWS+idx+1:raise ValueError("Maximum 5,000 records per upload")
-                remaining=list(islice(sheet.iter_rows(min_row=idx+2,values_only=True),MAX_ROWS+2))
+                if sheet.max_row and sheet.max_row>MAX_ROWS+idx+1:raise ValueError("Maximum 50,000 records per upload")
+                remaining=sheet.iter_rows(min_row=idx+2,values_only=True)
                 return _process_table(sheet.title,idx,first[idx],cols,branches,remaining,service)
         finally:book.close()
     except ValueError:raise
@@ -201,3 +202,72 @@ def import_headers(service):
     base=["Name","Email","Website","Country","City","Source URL","Evidence Notes","Subject","First Message","First Message English","Do Not Contact"]
     fields=[aliases[0] for key,aliases in SERVICES[service].items() if key!="name"]
     return list(dict.fromkeys(base+fields+["Message 01","Message0101Yes","Message0101No","Message0101Question","Message0201Yes","Message0201No"]))
+
+
+def iter_service_chunks(data,filename,service,chunk_size=500):
+    """Yield (parsed partial table) without materializing all spreadsheet rows.
+
+    Shared duplicate state and absolute row indices span all batches, even for
+    XLSX. A trailing 50,001st row causes a hard failure before it is imported.
+    """
+    if service not in SERVICES:raise ValueError("Unsupported Letter Desk service")
+    if not isinstance(data,bytes) or len(data)>MAX_BYTES:raise ValueError("Workbook exceeds 64 MB.")
+    if type(chunk_size)!=int or not 1<=chunk_size<=1000:
+        raise ValueError("Import chunk size must be 1–1,000 rows")
+    filename=str(filename or "").lower()
+    from itertools import chain
+    def consume(name,idx,head,cols,branches,source):
+        seen=set()
+        count=0
+        start=idx+2
+        while True:
+            section=list(islice(source,chunk_size))
+            if not section:return
+            count+=len(section)
+            if count>MAX_ROWS:
+                raise ValueError("Maximum 50,000 records per upload")
+            # The absolute file line index is preserved in import audit.
+            part=_process_table(name,idx,head,cols,branches,section,service,
+                                first_row=start,seen=seen)
+            start+=len(section)
+            yield part
+    if filename.endswith(".csv"):
+        try:
+            with io.BytesIO(data) as stream:
+                textio=io.TextIOWrapper(stream,encoding="utf-8-sig",newline="")
+                reader=csv.reader(textio)
+                first=list(islice(reader,20))
+                idx,cols,branches=_find_sheet(first,service)
+                if idx is None:raise ValueError("No recognizable prospect headings in CSV")
+                yield from consume("CSV",idx,first[idx],cols,branches,
+                                   chain(first[idx+1:],reader))
+        except (UnicodeDecodeError,csv.Error) as exc:
+            raise ValueError("Invalid CSV file") from exc
+        return
+    if not filename.endswith((".xlsx",".xlsm")):
+        raise ValueError("Upload an .xlsx, .xlsm or .csv file.")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            infos=z.infolist()
+            if (len(infos)>2000 or sum(x.file_size for x in infos)>MAX_UNCOMPRESSED
+                or any(x.flag_bits&1 for x in infos)):
+                raise ValueError("Workbook is too large or is password protected")
+        book=load_workbook(io.BytesIO(data),read_only=True,data_only=True)
+        try:
+            for sheet in book.worksheets:
+                if sheet.max_column and sheet.max_column>MAX_COLUMNS:continue
+                first=list(islice(sheet.iter_rows(values_only=True),20))
+                idx,cols,branches=_find_sheet(first,service)
+                if idx is None:continue
+                if sheet.max_row and sheet.max_row>MAX_ROWS+idx+1:
+                    raise ValueError("Maximum 50,000 records per upload")
+                yield from consume(sheet.title,idx,first[idx],cols,branches,
+                    sheet.iter_rows(min_row=idx+2,values_only=True))
+                return
+        finally:
+            book.close()
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Invalid or unreadable Excel workbook") from exc
+    raise ValueError("No recognizable prospect headings in workbook")
