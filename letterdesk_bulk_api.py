@@ -87,10 +87,16 @@ def install_bulk_import_api(app:FastAPI,engine,authenticate):
         team,account,ws=auth(request,service)
         if not staging_enabled():raise HTTPException(403,"Large-file staging is disabled")
         if index<0 or index>=64:raise HTTPException(400,"Invalid part number")
-        if request.headers.get("content-length") and int(request.headers["content-length"])>PART_BYTES:
-            raise HTTPException(413,"Chunk exceeds 1 MB")
-        raw=await request.body()
-        return store_part(engine,job_id,team,ws,account,index,raw)
+        # Read the HTTP body incrementally. Do not trust Content-Length:
+        # a chunked/malformed request must never allocate unbounded memory.
+        raw=bytearray()
+        async for block in request.stream():
+            raw.extend(block)
+            if len(raw)>PART_BYTES:
+                raise HTTPException(413,"Chunk exceeds 1 MB")
+        if not raw:
+            raise HTTPException(400,"Empty upload chunk")
+        return store_part(engine,job_id,team,ws,account,index,bytes(raw))
 
     @router.post("/services/{service}/bulk-uploads/{job_id}/finish")
     def finish(request:Request,service:str,job_id:UUID):
