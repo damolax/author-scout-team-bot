@@ -43,6 +43,16 @@ class BulkUploadAPITests(unittest.TestCase):
           json={"filename":"test.csv","size":100,"sha256":"a"*64})
         self.assertEqual(result.status_code,404)
 
+    def test_large_chunk_is_rejected_before_database_write(self):
+        with patch.dict(os.environ,{"LETTERDESK_BULK_UPLOAD_ENABLED":"true"}), \
+             patch("letterdesk_bulk_api.store_part") as store:
+            response=self.client.post(
+              "/api/v2/letterdesk/services/author/bulk-uploads/00000000-0000-0000-0000-000000000001/parts/0",
+              headers={"x-author-scout-key":"team1","content-type":"application/octet-stream"},
+              content=b"x"*(1024*1024+1))
+            self.assertEqual(response.status_code,413,response.text)
+            store.assert_not_called()
+
     def test_bulk_writes_off_by_default_even_with_signin(self):
         with patch.dict(os.environ,{"LETTERDESK_BULK_UPLOAD_ENABLED":"false"}):
             result=self.client.post("/api/v2/letterdesk/services/author/bulk-uploads",
