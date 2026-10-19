@@ -79,8 +79,14 @@ def begin_job(engine,team,workspace,account,filename,size,sha):
         if old:
             if old["status"] in ("completed","processing","queued"):
                 raise HTTPException(409,"This file is already imported or being processed in this service")
+            if old["status"]=="failed":
+                db.execute(text("""UPDATE public.ld_bulk_upload_jobs SET status='uploading',
+                    last_error=NULL,processed_parts=0,processed_rows=0,
+                    preview_summary=NULL,preview_sample=NULL,
+                    updated_at=now() WHERE id=CAST(:id AS uuid)"""),{"id":old["id"]})
             return {"id":old["id"],"chunk_bytes":PART_BYTES,"parts":count,
-                    "status":old["status"],"already_exists":True}
+                    "status":"uploading" if old["status"]=="failed" else old["status"],
+                    "already_exists":True}
         jid=db.execute(text("""INSERT INTO public.ld_bulk_upload_jobs
             (workspace_id,team_id,owner_account_id,filename,bytes_total,part_size,
              part_count,sha256,status)
@@ -176,9 +182,12 @@ def confirm_job(engine,job_id,team,workspace,account,confirmation):
 def claim_job(engine):
     with engine.begin() as db:
         row=db.execute(text("""SELECT id,status FROM public.ld_bulk_upload_jobs
-           WHERE status IN ('previewing','queued')
-             OR (status='processing' AND lease_expires_at<now())
-           ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED""")).mappings().first()
+           WHERE (status='previewing'
+                    AND (lease_expires_at IS NULL OR lease_expires_at<now()))
+              OR (:write_enabled AND status='queued')
+              OR (:write_enabled AND status='processing' AND lease_expires_at<now())
+           ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED"""),
+           {"write_enabled":writes_enabled()}).mappings().first()
         if not row:return None
         status="previewing" if row["status"]=="previewing" else "processing"
         job=db.execute(text("""UPDATE public.ld_bulk_upload_jobs
@@ -269,10 +278,6 @@ def job_once(engine):
         job["_service"]=service
         if job["status"]=="previewing":preview_worker(engine,job)
         elif writes_enabled():commit_worker(engine,job)
-        else:
-            with engine.begin() as db:
-                db.execute(text("""UPDATE public.ld_bulk_upload_jobs SET status='queued',
-                    lease_expires_at=NULL,updated_at=now() WHERE id=:id"""),{"id":job["id"]})
         return {"status":job["status"],"id":str(job["id"])}
     except Exception as error:
         with engine.begin() as db:
