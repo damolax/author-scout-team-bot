@@ -10,7 +10,8 @@ from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import Response
 from sqlalchemy import text
 
-from letterdesk_service_import import MAX_BYTES, SERVICES, parse_service_upload, import_headers
+from letterdesk_service_import import SERVICES, parse_service_upload, import_headers
+MAX_DIRECT_BYTES=8*1024*1024
 from letterdesk_import_plan import plan, file_token, verify_token, preview_row
 from letterdesk_import_commit import save_confirmed_import
 from letterdesk_import_undo import preview as preview_undo, execute as execute_undo, undo_enabled
@@ -33,9 +34,9 @@ def install_import_api(app:FastAPI,engine,authenticate):
         filename=(file.filename or "").replace("\\","/").split("/")[-1][:200]
         if not filename.lower().endswith((".xlsx",".xlsm",".csv")):
             raise HTTPException(400,"Upload an Excel workbook or CSV file")
-        content=await file.read(MAX_BYTES+1)
+        content=await file.read(MAX_DIRECT_BYTES+1)
         await file.close()
-        if len(content)>MAX_BYTES:raise HTTPException(413,"8 MB upload limit exceeded")
+        if len(content)>MAX_DIRECT_BYTES:raise HTTPException(413,"Use the bulk uploader for files over 8 MB")
         return content,filename
 
     def write_allowed():
