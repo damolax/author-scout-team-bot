@@ -109,6 +109,40 @@ def install_letterdesk_v2_routes(
             "limit": limit, "offset": offset,
         }
 
+    @router.get("/services/{service_key}/attention")
+    def attention_queue(request:Request,service_key:str):
+        team=team_id_for(request)
+        if service_key not in SERVICE_KEYS:raise HTTPException(404,"Unknown service")
+        params={"team":team,"service":service_key}
+        context=""" FROM public.ld_service_workspaces w
+                     WHERE w.team_id=:team AND w.service_key=:service
+                       AND w.is_active=true"""
+        replied=first("""SELECT COUNT(*) AS count FROM public.ld_reply_inbox r
+           JOIN public.ld_service_workspaces w ON w.id=r.workspace_id
+           WHERE w.team_id=:team AND w.service_key=:service
+             AND r.status='pending_review'""",**params).get("count",0)
+        drafts=first("""SELECT COUNT(*) AS count FROM public.ld_message_records m
+           JOIN public.ld_conversations c ON c.id=m.conversation_id
+           JOIN public.ld_opportunities o ON o.id=c.opportunity_id
+           JOIN public.ld_service_workspaces w ON w.id=o.workspace_id
+           WHERE w.team_id=:team AND w.service_key=:service AND m.status='needs_review'""",**params).get("count",0)
+        missing=first("""SELECT COUNT(*) AS count FROM public.ld_opportunities o
+           JOIN public.ld_service_workspaces w ON w.id=o.workspace_id
+           WHERE w.team_id=:team AND w.service_key=:service
+           AND COALESCE(TRIM(o.evidence_summary),'')=''
+           AND NOT EXISTS(SELECT 1 FROM public.ld_evidence e WHERE e.opportunity_id=o.id)""",**params).get("count",0)
+        conflicts=first("""SELECT COUNT(*) AS count FROM public.ld_import_rows ir
+           JOIN public.ld_import_batches b ON b.id=ir.batch_id
+           JOIN public.ld_service_workspaces w ON w.id=b.workspace_id
+           WHERE w.team_id=:team AND w.service_key=:service
+             AND ir.disposition='review_required'""",**params).get("count",0)
+        return {"ok":True,"items":[
+            {"code":"replies","label":"Replies awaiting a decision","count":int(replied or 0),"screen":"inbox"},
+            {"code":"drafts","label":"Message drafts awaiting approval","count":int(drafts or 0),"screen":"campaigns"},
+            {"code":"evidence","label":"Prospects needing source-backed research","count":int(missing or 0),"screen":"prospects"},
+            {"code":"conflicts","label":"Uploaded records with differences to review","count":int(conflicts or 0),"screen":"imports"},
+        ]}
+    
     @router.get("/services/{service_key}/leads/{opportunity_id}")
     def prospect_profile(request: Request, service_key: str, opportunity_id: __import__("uuid").UUID):
         """Private, one-contact read model: evidence, messages and import history."""
