@@ -43,8 +43,8 @@ function splitLabel(code){return code.replace(/(Yes|NoReply|No|Question|Objectio
 function emptyNode(code){return {code,stage:'generic',subject:'',body:'',delayMinutes:0,reviewRequired:true,variants:[]}}
 function parseError(err){return typeof err?.message==='string'?err.message:'Could not complete the request'}
 
-export default function FlowStudio({serviceKey,keyValue,request,active}){
-  const [open,setOpen]=useState(false)
+export default function FlowStudio({serviceKey,keyValue,request,active ,standalone=false}){
+  const [open,setOpen]=useState(standalone)
   const [saved,setSaved]=useState([])
   const [flowId,setFlowId]=useState('')
   const [revision,setRevision]=useState(0)
@@ -88,7 +88,7 @@ export default function FlowStudio({serviceKey,keyValue,request,active}){
     setDoc(null);setFlowId('');setRevision(0)
     setSaved([]);setValidation(null);setSimulation(null)
     setSelected(START);setName('');setError('');setNotice('')
-    setOpen(false);setWriteEnabled(false)
+    setOpen(standalone);setWriteEnabled(false)
   },[serviceKey])
   useEffect(()=>{
     if(!active||!keyValue||!open)return
@@ -259,7 +259,7 @@ export default function FlowStudio({serviceKey,keyValue,request,active}){
     }catch(e){setError(parseError(e))}
     finally{setBusy('')}
   }
-  return <section className="ld-flow" aria-label="Conversation automation designer">
+  return <section className= "ld-flow" aria-label="Conversation automation designer">
     <div className="ld-flow-heading">
       <div>
         <span className="ld-flow-kicker">PHASE 5 / CONVERSATION WORKFLOWS</span>
