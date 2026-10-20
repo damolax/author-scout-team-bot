@@ -9,8 +9,8 @@ const BASES=[
 ]
 const fmt=v=>(Number(v)||0).toLocaleString()
 
-export default function CampaignStudio({active,serviceKey,keyValue,request}){
-  const [open,setOpen]=useState(false)
+export default function CampaignStudio({active,serviceKey,keyValue,request ,standalone=false}){
+  const [open,setOpen]=useState(standalone)
   const [connections,setConnections]=useState([])
   const [senders,setSenders]=useState([])
   const [campaigns,setCampaigns]=useState([])
@@ -51,7 +51,7 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
     }catch(e){setError(e.message||'Could not load Gmail or campaign settings')}
   }
   useEffect(()=>{
-    setOpen(false);setConnections([]);setSenders([]);setCampaigns([])
+    setOpen(standalone);setConnections([]);setSenders([]);setCampaigns([])
     setIdentities({});setNewName('');setSenderId('');setSelectedCampaign('')
     setEntries([]);setAvailableDrafts([]);setNotice('');setError('')
   },[serviceKey])
@@ -153,7 +153,7 @@ export default function CampaignStudio({active,serviceKey,keyValue,request}){
     }catch(e){setError(e.message)}
     finally{setWorking('')}
   }
-  return <section className="ld-campaign" aria-label="Gmail accounts and campaigns">
+  return <section className= "ld-campaign" aria-label="Gmail accounts and campaigns">
     <div className="ld-campaign-top">
       <div><span className="ld-campaign-kicker">PHASE 6 / ACCOUNT AND OUTREACH CONTROLS</span>
         <h3>Gmail & Campaign Center</h3>
