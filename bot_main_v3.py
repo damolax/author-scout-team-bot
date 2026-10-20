@@ -3796,6 +3796,8 @@ async def connection_shutdown():
 if os.getenv("LETTERDESK_V2_ENABLED", "false").strip().lower() in {"true", "1", "yes"}:
     from letterdesk_v2_api import install_letterdesk_v2_routes
     install_letterdesk_v2_routes(app, legacy.engine, _web_auth)
+    from letterdesk_field_review_api import install_field_review_api
+    install_field_review_api(app, legacy.engine, _web_auth)
     from letterdesk_scout_api import install_scouting_api
     install_scouting_api(app, legacy.engine, _web_auth)
     from letterdesk_import_api import install_import_api
@@ -3890,6 +3892,12 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             and path.endswith("/imports/confirm")
             and os.getenv("LETTERDESK_IMPORT_WRITE_ENABLED", "false").lower() in ("true", "1", "yes")
         )
+        field_review_allowed = (
+            request.method=="POST"
+            and path.startswith("/api/v2/letterdesk/services/")
+            and path.endswith("/review-field")
+            and os.getenv("LETTERDESK_IMPORT_WRITE_ENABLED","false").lower() in ("true","yes","1")
+        )
         import_undo_allowed = (
             request.method == "POST"
             and path.startswith("/api/v2/letterdesk/services/")
@@ -3919,6 +3927,6 @@ if os.getenv("LETTERDESK_STAGING_ISOLATED", "false").strip().lower() in {"true",
             and (path.endswith("/scout/jobs") or
                  ("/scout/jobs/" in path and path.endswith("/run")))
         )
-        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or import_undo_allowed or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write or reply_preview or reply_write)) or bulk_uploads_allowed or flow_write:
+        if (request.method == "GET" and allowed_get) or (request.method == "POST" and (allowed_post or allow_scout or allow_import_preview or allow_import_confirm or import_undo_allowed or field_review_allowed or flow_read_only_post or gmail_connect or gmail_disconnect or campaign_write or reply_preview or reply_write)) or bulk_uploads_allowed or flow_write:
             return await call_next(request)
         return JSONResponse({"detail": "This preview is read-only. Sending, scraping and mutating operations are disabled."}, status_code=403)
