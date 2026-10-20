@@ -1,5 +1,7 @@
 import React,{useEffect,useMemo,useState} from 'react'
 import './flow-studio.css'
+import FlowCanvas from './FlowCanvas.jsx'
+import {canLink} from './flow-geometry.js'
 
 const OUTCOMES=['yes','no','positive','question','objection','not_now','negative','opt_out','no_reply','bounce','uncertain']
 const ACTIONS=['draft_for_review','manual_review','wait','stop']
@@ -145,6 +147,41 @@ export default function FlowStudio({serviceKey,keyValue,request,active ,standalo
     editDoc(next=>next.nodes.push(emptyNode(code)))
     setSelected(code)
   }
+  function addAfter(from,outcome){
+    if(!doc)return
+    const root=doc.nodes.find(n=>n.code===from)
+    if(!root||['terminal','success'].includes(root.stage)){setError('Completed messages cannot have outgoing branches.');return}
+    const existing=doc.edges.find(e=>e.from===from&&e.outcome===outcome)
+    if(existing){if(existing.to)setSelected(existing.to);setError('This response branch already exists. Edit it instead.');return}
+    if(doc.nodes.length>=45||doc.edges.length>=120){setError('This template has reached its safe graph limit.');return}
+    const stop=['negative','opt_out','bounce'].includes(outcome)
+    let code=''
+    if(!stop){
+      let index=1
+      do{
+        const suffix=outcome==='yes'||outcome==='positive'?'Yes':outcome==='no'?'No':
+          outcome==='question'?'Question':outcome==='objection'?'Objection':
+          outcome==='not_now'?'Later':outcome==='no_reply'?'NoReply':'Review'
+        code='Message'+String(500000+index)+suffix;index++
+      }while(doc.nodes.some(n=>n.code===code))
+    }
+    editDoc(next=>{
+      if(!stop)next.nodes.push(emptyNode(code))
+      next.edges.push({from,outcome,to:stop?null:code,action:stop?'stop':'draft_for_review',
+        ...(outcome==='no_reply'?{delayMinutes:10080}:{})})
+    })
+    if(!stop)setSelected(code)
+    setError('')
+  }
+  function connectExisting(from,to,outcome){
+    if(!doc)return
+    const reason=canLink(doc,from,to,outcome)
+    if(reason){setError(reason);return}
+    if(doc.edges.length>=120){setError('Template reached its branch limit');return}
+    editDoc(next=>next.edges.push({from,to,outcome,action:'draft_for_review',
+      ...(outcome==='no_reply'?{delayMinutes:10080}:{})}))
+    setSelected(to);setError('')
+  }
   function removeSelected(){
     if(selected===START||!doc||!window.confirm('Delete this message and all branches connected to it?'))return
     const code=selected
@@ -262,7 +299,7 @@ export default function FlowStudio({serviceKey,keyValue,request,active ,standalo
   return <section className= "ld-flow" aria-label="Conversation automation designer">
     <div className="ld-flow-heading">
       <div>
-        <span className="ld-flow-kicker">PHASE 5 / CONVERSATION WORKFLOWS</span>
+        <span className="ld-flow-kicker">VISUAL AUTOMATION / CONVERSATION DESIGN</span>
         <h3>Conversation Builder</h3>
         <p>Create the paths behind every message: interest, questions, objections, No, follow-ups and opt-outs.</p>
       </div>
@@ -305,29 +342,9 @@ export default function FlowStudio({serviceKey,keyValue,request,active ,standalo
       </div>
 
       <div className="ld-flow-section-top"><strong>Visual decision map</strong><span>Select any message to edit it. Connect messages using outcome rules below.</span></div>
-      <div className="ld-flow-map-scroll" tabIndex={0} aria-label="Scrollable conversation flow diagram">
-        <div className="ld-flow-map" style={{width:positions.width,height:positions.height}}>
-          <svg aria-hidden="true" className="ld-flow-svg" viewBox={'0 0 '+positions.width+' '+positions.height} preserveAspectRatio="none">
-            <defs><marker id="ld-flow-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#92b5a3"/></marker></defs>
-            {doc.edges.filter(e=>e.to&&positions.positions[e.from]&&positions.positions[e.to]).map((e,i)=>{
-              const a=positions.positions[e.from],b=positions.positions[e.to]
-              return <path key={e.from+'-'+e.outcome+'-'+i}
-                d={'M '+(a.x+220)+' '+(a.y+43)+' C '+(a.x+248)+' '+(a.y+43)+' '+(b.x-35)+' '+(b.y+43)+' '+(b.x-5)+' '+(b.y+43)}
-                fill="none" stroke={COLOR[e.outcome]||'#91a49a'} strokeWidth="1.8" strokeOpacity=".65" markerEnd="url(#ld-flow-arrow)"/>
-            })}
-          </svg>
-          {doc.nodes.map(node=>{
-            const p=positions.positions[node.code]
-            if(!p)return null
-            return <button key={node.code} type="button" className={'ld-flow-node '+(selected===node.code?'is-selected ':'')+(node.stage==='terminal'?'is-terminal':'')}
-              style={{left:p.x,top:p.y}} onClick={()=>{setSelected(node.code);setSimulation(null)}} aria-pressed={selected===node.code}>
-              <span>{node.stage.replaceAll('_',' ')}</span><strong>{splitLabel(node.code)}</strong>
-              <small>{node.body?node.body.slice(0,73):node.stage==='terminal'?'Stop / do not send':'Write a message for this stage'}</small>
-            </button>
-          })}
-        </div>
-      </div>
-      <div className="ld-flow-editor">
+      <FlowCanvas doc={doc} selected={selected} onSelect={code=>{setSelected(code);setSimulation(null)}}
+         onAdd={addAfter} onConnect={connectExisting}/>
+       <div className="ld-flow-editor">
         <div className="ld-flow-edit-panel">
           <div className="ld-flow-section-top"><strong>Message editor</strong>
             <div><button type="button" onClick={createNode} disabled={doc.nodes.length>=45}>＋ Add message</button>
