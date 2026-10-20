@@ -41,6 +41,13 @@ export default function ProspectProfile({serviceKey,opportunityId,keyValue,reque
           <dl>{[['Website',lead.website],['Source',lead.source_url],['City',lead.city],['Country',lead.country],
             ['Evidence summary',record?.opportunity?.evidence_summary],['Research status',record?.opportunity?.status]]
             .map(([key,value])=><div key={key}><dt>{key}</dt><dd>{safeLink(value)?<a href={safeLink(value)} target="_blank" rel="noopener noreferrer">{value} ↗</a>:value||'Not yet recorded'}</dd></div>)}</dl>
+          <h3>Language and translation review</h3>
+          <div className="ld-profile-language">
+            <strong>{record?.language?.language||'No language confirmed'}</strong>
+            <p>{record?.language?.source?.replaceAll('_',' ')||'Unknown'} · {record?.language?.confidence||'unverified'}</p>
+            {record?.language?.needs_confirmation&&<p>Country is only a suggestion. Verify this prospect's preferred language before creating or translating any outbound message.</p>}
+            {record?.language?.alternatives?.length>1&&<small>Possible regional languages: {record.language.alternatives.join(', ')}</small>}
+          </div>
           <h3>Service-specific details</h3><pre>{JSON.stringify(record?.opportunity?.service_details||{},null,2)}</pre>
         </div>}
         {section==='evidence'&&<div className="ld-profile-section"><h3>Verified source observations</h3>
