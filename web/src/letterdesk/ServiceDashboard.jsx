@@ -56,6 +56,7 @@ export default function ServiceDashboard({ active, keyValue, request }) {
   const [railOpen, setRailOpen] = useState(true)
   const [mobileRail, setMobileRail] = useState(false)
   const [profileId, setProfileId] = useState('')
+  const [visited, setVisited] = useState(['overview'])
   const [services, setServices] = useState([])
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
@@ -126,7 +127,7 @@ export default function ServiceDashboard({ active, keyValue, request }) {
   ]
   const chosen = nav.find(n=>n.key===screen) || nav[0]
   function navigate(next) {
-    setScreen(next);setMobileRail(false);setProfileId('')
+    setScreen(next);setVisited(v=>v.includes(next)?v:[...v,next]);setMobileRail(false);setProfileId('')
   }
   const metricsCards=[
     ['Research leads',metrics?.prospect_count],['Drafts to review',metrics?.draft_count],
@@ -196,11 +197,11 @@ export default function ServiceDashboard({ active, keyValue, request }) {
         {leadsTable}
       </>}
       {screen==='prospects'&&leadsTable}
-      {screen==='research'&&<ScoutingStudio key={serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} standalone/>}
-      {screen==='imports'&&<ImportStudio key={'import-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} active={active} onImported={()=>setReload(n=>n+1)} standalone/>}
-      {screen==='flows'&&<FlowStudio key={'flow-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} standalone/>}
-      {screen==='campaigns'&&<CampaignStudio key={'campaign-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} standalone/>}
-      {screen==='inbox'&&<ReplyStudio key={'reply-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} standalone/>}
+      {visited.includes('research')&&<div hidden={screen!=='research'} className="ld2-screen-panel"><ScoutingStudio key={serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active&&screen==='research'} standalone/></div>}
+      {visited.includes('imports')&&<div hidden={screen!=='imports'} className="ld2-screen-panel"><ImportStudio key={'import-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} active={active&&screen==='imports'} onImported={()=>setReload(n=>n+1)} standalone/></div>}
+      {visited.includes('flows')&&<div hidden={screen!=='flows'} className="ld2-screen-panel"><FlowStudio key={'flow-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active&&screen==='flows'} standalone/></div>}
+      {visited.includes('campaigns')&&<div hidden={screen!=='campaigns'} className="ld2-screen-panel"><CampaignStudio key={'campaign-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active&&screen==='campaigns'} standalone/></div>}
+      {visited.includes('inbox')&&<div hidden={screen!=='inbox'} className="ld2-screen-panel"><ReplyStudio key={'reply-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active&&screen==='inbox'} standalone/></div>}
       {screen==='analytics'&&<><div className="ld2-metrics">{metricsCards.map(([label,value])=><div className="ld2-metric" key={label}><span>{label}</span><strong>{fmt(value)}</strong></div>)}</div><p className="ld2-analytics-note">These figures come from your service's actual recorded opportunities and messages. Sending remains subject to account verification and campaign controls.</p></>}
       {profileId&&<ProspectProfile serviceKey={serviceKey} opportunityId={profileId} keyValue={keyValue} request={request} onClose={()=>setProfileId('')}/>}
     </main>
