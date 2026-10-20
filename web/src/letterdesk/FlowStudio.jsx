@@ -342,9 +342,10 @@ export default function FlowStudio({serviceKey,keyValue,request,active ,standalo
       </div>
 
       <div className="ld-flow-section-top"><strong>Visual decision map</strong><span>Select any message to edit it. Connect messages using outcome rules below.</span></div>
-      <FlowCanvas doc={doc} selected={selected} onSelect={code=>{setSelected(code);setSimulation(null)}}
-         onAdd={addAfter} onConnect={connectExisting}/>
-       <div className="ld-flow-editor">
+      <div className="ld-flow-workbench">
+        <FlowCanvas doc={doc} selected={selected} onSelect={code=>{setSelected(code);setSimulation(null)}}
+          onAdd={addAfter} onConnect={connectExisting}/>
+        <div className="ld-flow-editor">
         <div className="ld-flow-edit-panel">
           <div className="ld-flow-section-top"><strong>Message editor</strong>
             <div><button type="button" onClick={createNode} disabled={doc.nodes.length>=45}>＋ Add message</button>
@@ -405,6 +406,7 @@ export default function FlowStudio({serviceKey,keyValue,request,active ,standalo
             </select></label>
             <button type="button" onClick={appendBranch}>＋ Add branch</button>
           </div>
+        </div>
         </div>
       </div>
 
