@@ -75,14 +75,20 @@ export default function FlowCanvas({doc,selected,onSelect,onAdd,onConnect}){
                 if(e.button!==0)return
                 e.preventDefault();setDragging({pointerId:e.pointerId,code:node.code,x:e.clientX,y:e.clientY,left:p.x,top:p.y})
               }}><span>⋮⋮</span> {node.stage.replaceAll('_',' ').toUpperCase()}</div>
-              <button className="ld-canvas-node-content" type="button" onClick={()=>useNode(node.code)} aria-pressed={selected===node.code}>
+              <button className="ld-canvas-node-content" type="button" onClick={()=>useNode(node.code)} aria-pressed={selected===node.code}
+                onDragOver={e=>{if(e.dataTransfer.types.includes('application/x-letterdesk-node'))e.preventDefault()}}
+                onDrop={e=>{e.preventDefault();const from=e.dataTransfer.getData('application/x-letterdesk-node');if(from){onConnect(from,node.code,branchOutcome);setLinkFrom('')}}}>
                 <strong>{node.code}</strong><small>{terminal?'End conversation / do not send':(node.body||'Click to edit this message').slice(0,83)}</small>
               </button>
               {!terminal&&<div className="ld-canvas-node-actions">
                 <button title={'Add response after '+node.code} aria-label={'Add response after '+node.code}
                   type="button" onClick={()=>{onSelect(node.code);setBranchFrom(branchFrom===node.code?'':node.code)}}>＋</button>
-                <button title={'Connect '+node.code+' to another message'} aria-label={'Connect '+node.code+' to another message'}
-                  type="button" onClick={()=>{onSelect(node.code);setLinkFrom(node.code);setBranchFrom('')}}>◉</button>
+                <button title={'Drag this connector to another message'} aria-label={'Drag connector from '+node.code+' to another message'}
+                  type="button" draggable="true" onDragStart={e=>{
+                    e.dataTransfer.setData('application/x-letterdesk-node',node.code)
+                    e.dataTransfer.effectAllowed='link';setLinkFrom(node.code);setBranchFrom('')
+                  }} onDragEnd={()=>setLinkFrom('')}
+                  onClick={()=>{onSelect(node.code);setLinkFrom(node.code);setBranchFrom('')}}>◉</button>
               </div>}
               {branchFrom===node.code&&<div className="ld-canvas-quickadd">
                 <strong>Add response</strong>
