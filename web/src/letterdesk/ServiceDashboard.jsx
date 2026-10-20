@@ -35,7 +35,7 @@ function safeLink(raw) {
   try { const u = new URL(raw); return ['https:','http:'].includes(u.protocol) ? u.href : null } catch { return null }
 }
 function exportTemplate(mode) {
-  const common = ['Name','Email','Website','Country','City','Source URL','Evidence Notes','Subject','First Message','First Message English','Do Not Contact']
+  const common = ['Name','Email','Website','Country','Region','City','Preferred Language','Writing Language','Message Language','Research Date','Source URL','Evidence Notes','Subject','First Message','First Message English','Do Not Contact']
   const specific = Object.values(mode.fields).map(aliases => aliases[0])
   const graph = ['Message 01','Message0101Yes','Message0101No','Message0101Question','Message0201Yes','Message0201No']
   const headers = [...new Set([...common, ...specific, ...graph])]
