@@ -38,6 +38,7 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported ,sta
   const [expanded,setExpanded]=useState(standalone)
   const [undoPreview,setUndoPreview]=useState(null)
   const [undoFilename,setUndoFilename]=useState('')
+  const [decisions,setDecisions]=useState({})
 
   async function history(){
     if(!keyValue||!active)return
@@ -50,7 +51,7 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported ,sta
 
   function chooseFile(next) {
     setFile(next||null)
-    setPreview(null)
+    setPreview(null);setDecisions({})
     setError('');setNotice('')
     if(next&&next.size>MAX_FILE_BYTES)setError('This file exceeds the 8 MB import limit.')
     else if(next&&!/\.(csv|xlsx|xlsm)$/i.test(next.name))setError('Choose a CSV or Excel workbook (.xlsx / .xlsm).')
@@ -101,6 +102,27 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported ,sta
     }catch(e){setError(e.message)}
     finally{setBusy('')}
   }
+  async function decideField(row,diff,decision){
+    if(!preview?.write_enabled||!row.existing_opportunity_id)return
+    const key=row.row+':'+diff.field
+    setBusy('field:'+key);setError('');setNotice('')
+    try{
+      const response=await fetch(API+'/api/v2/letterdesk/services/'+serviceKey+
+        '/prospects/'+row.existing_opportunity_id+'/review-field',{
+          method:'POST',headers:{'X-Author-Scout-Key':keyValue,'Content-Type':'application/json'},
+          body:JSON.stringify({field:diff.field,previous:diff.previous||'',
+             incoming:diff.incoming,decision,source_sha256:preview.file_sha256,row:row.row})
+        })
+      const result=await response.json().catch(()=>({}))
+      if(!response.ok)throw new Error(result.detail||'Could not record field decision')
+      setDecisions(v=>({...v,[key]:decision}))
+      setNotice((decision==='accepted'?'Accepted change to ':'Kept existing ')+diff.field+
+        '. Decision recorded; no email was sent.')
+      onImported?.()
+    }catch(e){setError(e.message||'Could not review the change')}
+    finally{setBusy('')}
+  }
+
   async function viewUndo(batch){
     setBusy('undo-preview');setError('');setNotice('');setUndoPreview(null)
     try{
@@ -202,9 +224,18 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported ,sta
                   <strong>{d.field.replaceAll('_',' ').replaceAll('.',' / ')} · {d.change}</strong>
                   <div><section><small>Existing</small><p>{d.previous||'Not recorded'}</p></section>
                     <section><small>New upload</small><p>{d.incoming}</p></section></div>
+                  {decisions[row.row+':'+d.field]
+                    ?<p className="ld-import-decision">Decision: {decisions[row.row+':'+d.field]==='accepted'?'New information accepted':'Existing information kept'}</p>
+                    :<div className="ld-import-decide">
+                      <button type="button" disabled={!preview.write_enabled||!row.existing_opportunity_id||Boolean(busy)}
+                        onClick={()=>decideField(row,d,'rejected')}>Keep existing</button>
+                      <button type="button" disabled={!preview.write_enabled||!row.existing_opportunity_id||Boolean(busy)||
+                        d.field==='email'||d.field.startsWith('branches.')}
+                        onClick={()=>decideField(row,d,'accepted')}>Accept new value</button>
+                    </div>}
                 </div>)}
               </div>
-              <p>Held for review. Choose Keep existing for now; update acceptance will require an authenticated, audited decision.</p>
+              <p>Changes remain held until you approve a specific field. Email addresses and conversation branches require separate verification and review.</p>
             </details>)}
           {s.review_required>25&&<p className="ld-import-footnote">Only the first 25 sample rows are shown. Other changes are held, never automatically merged.</p>}
         </div>}
