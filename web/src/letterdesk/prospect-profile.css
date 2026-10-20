@@ -1,0 +1,19 @@
+.ld-profile-layer{position:fixed;inset:0;z-index:1000;display:flex;justify-content:flex-end}
+.ld-profile-backdrop{position:absolute;inset:0;border:0;background:#0c211988;cursor:pointer}
+.ld-profile-panel{position:relative;z-index:1;width:min(700px,95vw);height:100%;overflow:auto;background:white;padding:clamp(18px,2.8vw,38px);box-shadow:-10px 0 40px #0b1e1430;color:#1c4330}
+.ld-profile-header{display:flex;align-items:flex-start;justify-content:space-between;gap:15px}
+.ld-profile-header small{font-size:10px;font-weight:800;letter-spacing:.1em;color:#629374}
+.ld-profile-header h2{font-size:26px;margin:7px 0}.ld-profile-header p{color:#7e9384;font-size:12px}
+.ld-profile-header button{border:1px solid #d5e5d7;border-radius:8px;padding:9px 12px;background:white;color:#22583b;cursor:pointer;white-space:nowrap}
+.ld-profile-summary{display:flex;gap:8px;flex-wrap:wrap;margin:24px 0}
+.ld-profile-summary span{background:#edf6ef;border:1px solid #dcecdf;border-radius:18px;padding:8px 11px;font-size:11px;overflow-wrap:anywhere}
+.ld-profile-tabs{display:flex;gap:7px;flex-wrap:wrap;border-bottom:1px solid #e2eae2;margin-bottom:19px}
+.ld-profile-tabs button{border:0;border-bottom:2px solid transparent;background:transparent;color:#6e8174;cursor:pointer;font-size:12px;padding:12px}
+.ld-profile-tabs button.active{color:#216e43;border-color:#216e43;font-weight:800}
+.ld-profile-section h3{font-size:15px;margin:23px 0 12px}
+.ld-profile-section dl{margin:0}.ld-profile-section dl>div{display:grid;grid-template-columns:120px minmax(0,1fr);gap:13px;border-bottom:1px solid #e7eee8;padding:12px 0;font-size:12px}
+.ld-profile-section dt{color:#718779;font-weight:750}.ld-profile-section dd{margin:0;overflow-wrap:anywhere;line-height:1.6}
+.ld-profile-section a{color:#136d45}.ld-profile-section pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;background:#f6faf6;border-radius:10px;padding:13px}
+.ld-profile-section article{border:1px solid #e1ebe3;border-radius:10px;padding:16px;margin:13px 0;font-size:12px;line-height:1.7}
+.ld-profile-section article small{color:#879689}.ld-profile-section article h4{margin:8px 0}.ld-profile-message{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:550px){.ld-profile-panel{width:100vw}.ld-profile-section dl>div{grid-template-columns:1fr;gap:4px}}
