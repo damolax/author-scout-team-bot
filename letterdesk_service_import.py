@@ -27,6 +27,11 @@ COMMON = {
  "maps_url": ["Google Maps URL", "Maps URL", "Maps Link"],
  "country": ["Country", "Country Verified", "Country / Market"],
  "city": ["City", "Location"],
+ "region": ["Region","State","Province","Autonomous Community"],
+ "preferred_language": ["Preferred Language","Language Preference","Author Preferred Language","Contact Language"],
+ "evidence_language": ["Writing Language","Author Writing Language","Verified Language","Published Language"],
+ "message_language": ["Message Language","Outreach Language","First Message Language"],
+ "research_date": ["Research Date","Evidence Date","Verified On"],
  "source_url": ["Source URL", "Discovery Source", "Source Link", "Email Source", "Email Source URL", "Exact Email Source URL", "Contact Source"],
  "evidence": ["Evidence Notes", "Research Notes", "Research Summary", "Verified Research Summary", "Recent Activity", "Discovery Evidence", "Notes"],
  "subject": ["Subject", "Subject Line", "Selected Subject", "Personalized Subject", "Final Subject", "Message 01 Subject"],
@@ -153,7 +158,11 @@ def _process_table(name,header_idx,header,columns,branches,iterator,service,*,fi
             "country":record["country"],"city":record["city"],
             "source_url":record["source_url"],"evidence_notes":record["evidence"],
             "subject":record["subject"],"first_message":msg,"first_message_english":record["english"],
-            "branches":branch_data,"service_details":{k:v for k,v in record.items() if k in SERVICES[service] and k!="name" and v},
+            "branches":branch_data,"service_details":{
+                **{k:v for k,v in record.items() if k in SERVICES[service] and k!="name" and v},
+                **{k:record[k] for k in ("region","preferred_language","evidence_language",
+                      "message_language","research_date") if record.get(k)}
+            },
             "identity_key":key,"do_not_contact":suppressed,"historical_status":record["status"],
             "historical_only":historical,"errors":reason,
             "disposition":"invalid" if reason else "suppressed" if suppressed else "historical_skip" if historical else "ready_for_import",
@@ -200,7 +209,7 @@ def parse_service_upload(data,filename,service):
 
 def import_headers(service):
     if service not in SERVICES:raise ValueError("Unsupported Letter Desk service")
-    base=["Name","Email","Website","Country","City","Source URL","Evidence Notes","Subject","First Message","First Message English","Do Not Contact"]
+    base=["Name","Email","Website","Country","Region","City","Preferred Language","Writing Language","Message Language","Research Date","Source URL","Evidence Notes","Subject","First Message","First Message English","Do Not Contact"]
     fields=[aliases[0] for key,aliases in SERVICES[service].items() if key!="name"]
     return list(dict.fromkeys(base+fields+["Message 01","Message0101Yes","Message0101No","Message0101Question","Message0201Yes","Message0201No"]))
 
