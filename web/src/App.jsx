@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react'
 import { authClient, sessionTokenFrom } from './auth.js'
 import Letterdesk from './Letterdesk.jsx'
+import ServiceDashboard from './letterdesk/ServiceDashboard.jsx'
+import {isPasswordRecovery,withoutSigninHint,shouldTryStoredSession} from './letterdesk/session-policy.js'
+
+const ENABLE_LETTERDESK_V2 = import.meta.env.VITE_LETTERDESK_V2_UI === 'true'
+const BRAND_NAME = ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'
+const BRAND_TAGLINE = ENABLE_LETTERDESK_V2 ? 'Unified Scouting Workspace' : 'Research Intelligence'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'https://author-scout-team-bot.onrender.com').replace(/\/$/, '')
 
@@ -25,32 +31,47 @@ async function request(path, key, options = {}) {
   }
 }
 
-async function waitForBackend(maxWaitMs = 75000) {
+async function waitForBackend(maxWaitMs = 150000, onProgress = () => {}) {
   const started = Date.now()
   let lastError = null
+  let attempts = 0
   while (Date.now() - started < maxWaitMs) {
+    attempts++
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 12000)
+    const timer = setTimeout(() => controller.abort(), 16000)
     try {
       const res = await fetch(API_BASE + '/api/v1/health?ts=' + Date.now(), {
         method: 'GET',
         cache: 'no-store',
         signal: controller.signal,
       })
-      clearTimeout(timer)
       if (res.ok) {
         const body = await res.json().catch(() => ({}))
         if (body?.ok) return true
       }
-    } catch (e) {
-      lastError = e
-      clearTimeout(timer)
-    }
-    await new Promise(resolve => setTimeout(resolve, 1800))
+      lastError = new Error('Workspace server returned ' + res.status)
+    } catch (e) { lastError = e }
+    finally { clearTimeout(timer) }
+    const seconds = Math.floor((Date.now() - started) / 1000)
+    onProgress(seconds < 40
+      ? 'Starting your secure workspace…'
+      : 'The preview server is waking up. This can take up to two minutes on its first visit.')
+    if (Date.now() - started >= maxWaitMs) break
+    await new Promise(resolve => setTimeout(resolve, Math.min(2500 + attempts * 250, 4500)))
   }
-  throw lastError || new Error('Author Scout could not wake the secure login service. Please try again.')
+  throw new Error('The preview server did not become ready. Please try again in a moment. ' + (lastError?.message || ''))
 }
 
+async function requestWithRetry(path, key, options = {}, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    try { return await request(path, key, options) }
+    catch (e) {
+      if (e?.status && ![502, 503, 504].includes(e.status)) throw e
+      if (i === attempts - 1) throw e
+      await new Promise(resolve => setTimeout(resolve, 900 * (i + 1)))
+    }
+  }
+}
 function fmt(value) {
   if (!value) return '—'
   const d = new Date(value)
@@ -104,7 +125,7 @@ class AppErrorBoundary extends React.Component {
       <div className="login-shell">
         <div className="login-card">
           <div className="brand brand-login">
-            <div className="brand-mark">AS</div>
+            <div className="brand-mark">{ENABLE_LETTERDESK_V2 ? "LD" : "AS"}</div>
             <div><strong>Author Scout</strong><span>Workspace recovery</span></div>
           </div>
           <h1>We hit a display problem.</h1>
@@ -161,14 +182,14 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
     <div className="login-shell">
       <div className="login-card">
         <div className="brand brand-login">
-          <div className="brand-mark">AS</div>
-          <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
+          <div className="brand-mark">{ENABLE_LETTERDESK_V2 ? "LD" : "AS"}</div>
+          <div><strong>{BRAND_NAME}</strong><span>{BRAND_TAGLINE}</span></div>
         </div>
 
         {forgot ? <>
           <h1>Reset your password</h1>
           <p className="login-copy">
-            Enter the email address for your Author Scout account. We’ll send you a secure reset link.
+            Enter the email address for your {BRAND_NAME} account. We’ll send you a secure reset link.
           </p>
           {error && <div className="alert alert-error">{error}</div>}
           {forgotSent ? <div className="forgot-success">
@@ -196,17 +217,21 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
           <h1>{signup ? 'Create your account' : 'Welcome back'}</h1>
           <p className="login-copy">
             {signup
-              ? 'Create a private Author Scout workspace with your email and password. Email verification is not required to start using the app.'
-              : 'Sign in to your Author Scout workspace.'}
+              ? 'Create a private workspace with your email and password. Email verification is not required to start using the app.'
+              : `Sign in to your ${BRAND_NAME} workspace.`}
           </p>
 
           {error && <div className="alert alert-error">{error}</div>}
 
-          <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
-            <span className="google-g">G</span>{busy && status ? status : 'Continue with Google'}
-          </button>
-
-          <div className="auth-divider"><span>or</span></div>
+          {!ENABLE_LETTERDESK_V2 && <>
+            <button className="button button-primary button-block google-login" onClick={onGoogle} disabled={busy}>
+              <span className="google-g">G</span>{busy && status ? status : 'Continue with Google'}
+            </button>
+            <div className="auth-divider"><span>or</span></div>
+          </>}
+          {ENABLE_LETTERDESK_V2 && <p className="login-note" style={{margin:'0 0 14px',textAlign:'left'}}>
+            Preview access uses email and password. Google sign-in is paused on this staging site until its mobile redirect flow passes testing.
+          </p>}
 
           <form className="email-auth-form" onSubmit={(e) => { e.preventDefault(); onEmail(mode, form) }}>
             {signup && <div className="field">
@@ -233,7 +258,7 @@ function Login({ onGoogle, onEmail, onForgot, onRetry, busy, error, status }) {
           </form>
 
           <button className="auth-switch" onClick={() => setMode(signup ? 'signin' : 'signup')} disabled={busy}>
-            {signup ? 'Already have an account? Sign in' : 'New to Author Scout? Create account'}
+            {signup ? 'Already have an account? Sign in' : `New to ${BRAND_NAME}? Create account`}
           </button>
 
           <p className="login-note">
@@ -272,19 +297,19 @@ function ResetPasswordScreen({ token, errorCode }) {
     <div className="login-shell">
       <div className="login-card">
         <div className="brand brand-login">
-          <div className="brand-mark">AS</div>
-          <div><strong>Author Scout</strong><span>Research Intelligence</span></div>
+          <div className="brand-mark">{ENABLE_LETTERDESK_V2 ? "LD" : "AS"}</div>
+          <div><strong>{BRAND_NAME}</strong><span>{BRAND_TAGLINE}</span></div>
         </div>
         {done ? <>
           <div className="forgot-success">
             <div className="forgot-success-icon">✓</div>
             <h1>Password updated</h1>
-            <p>Your new password is ready. You can sign in to Author Scout now.</p>
+            <p>Your new password is ready. You can sign in to {BRAND_NAME} now.</p>
             <a className="button button-auth-email button-block" href="/?signin=1">Continue to sign in</a>
           </div>
         </> : <>
           <h1>Choose a new password</h1>
-          <p className="login-copy">Enter a new password for your Author Scout account.</p>
+          <p className="login-copy">Enter a new password for your {BRAND_NAME} account.</p>
           {error && <div className="alert alert-error">{error}</div>}
           <form className="email-auth-form" onSubmit={submit}>
             <div className="field">
@@ -1153,22 +1178,32 @@ function Connections({ keyValue, active }) {
   )
 }
 
-const NAV = [
-  ['dashboard','Overview','⌂'],
-  ['research','Scout','⌕'],
-  ['authors','Authors','A'],
-  ['messages','Letterdesk','✉'],
-  ['connections','Connections','↗'],
-]
+const NAV = ENABLE_LETTERDESK_V2
+  ? [['services','Service Workspaces','◈']]
+  : [
+      ['dashboard','Overview','⌂'],
+      ['research','Scout','⌕'],
+      ['authors','Authors','A'],
+      ['messages','Letterdesk','✉'],
+      ['connections','Connections','↗'],
+    ]
 
 function AppCore() {
+  useEffect(() => { if (ENABLE_LETTERDESK_V2) { document.title = 'Letter Desk — Unified Scouting'; const description = document.querySelector('meta[name="description"]'); if (description) description.setAttribute('content', 'Letter Desk — six specialized prospect research and outreach workspaces.') } }, [])
+  useEffect(() => {
+    if (!ENABLE_LETTERDESK_V2) return undefined
+    // Warm up the free staging service while the user signs in, without sending data.
+    const ctrl = new AbortController()
+    fetch(API_BASE + '/api/v1/health?warm=1', { signal: ctrl.signal, cache: 'no-store' }).catch(() => {})
+    return () => ctrl.abort()
+  }, [])
   const authEpoch=useRef(0)
   const [keyValue, setKeyValue] = useState(() => localStorage.getItem('authorScoutSession') || '')
-  const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(location.pathname==='/reset-password'||params.has('token')||params.has('error')||params.get('signin')==='1'||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
+  const [session, setSession] = useState(()=>{const params=new URLSearchParams(location.search);if(isPasswordRecovery(window.location.href)||params.has('session'))return null;try{const cached=JSON.parse(localStorage.getItem('authorScoutSessionInfo')||'null');return cached?.key===localStorage.getItem('authorScoutSession')?cached.session:null}catch{return null}})
   const [checking, setChecking] = useState(Boolean(keyValue))
   const [loginError, setLoginError] = useState('')
   const [loginStatus, setLoginStatus] = useState('')
-  const [tab, setTab] = useState(() => new URLSearchParams(window.location.search).get('tab') === 'messages' ? 'messages' : 'dashboard')
+  const [tab, setTab] = useState(() => { const requested = new URLSearchParams(window.location.search).get('tab'); return ENABLE_LETTERDESK_V2 ? 'services' : (requested === 'messages' ? 'messages' : 'dashboard') })
 
   const verify = useCallback(async (rawKey) => {
     const epoch=authEpoch.current
@@ -1185,6 +1220,11 @@ function AppCore() {
       setKeyValue(key)
       setSession(s)
       localStorage.setItem('authorScoutSessionInfo',JSON.stringify({key,session:s}))
+      const params=new URLSearchParams(window.location.search)
+      if(params.has('signin')){
+        params.delete('signin')
+        window.history.replaceState({},document.title,withoutSigninHint(window.location.href))
+      }
       setLoginStatus('')
       return true
     } catch(e) {
@@ -1202,39 +1242,63 @@ function AppCore() {
     const epoch=authEpoch.current
     setChecking(true)
     setLoginError('')
-    setLoginStatus('Opening your workspace…')
+    setLoginStatus('Finishing your secure sign-in…')
     try {
-      let token=sessionTokenFrom(authResult)
-      if (!token) {
-        const current=await authClient.getSession()
-        if (current?.error) throw new Error(current.error.message || 'Could not read your session')
-        token=sessionTokenFrom(current)
+      let token = sessionTokenFrom(authResult)
+      let authError = null
+      // Neon Auth may settle cookies slightly later than the sign-in response,
+      // particularly after Google redirects and on mobile browsers.
+      for (let attempt = 0; !token && attempt < 6; attempt++) {
+        try {
+          const current = await authClient.getSession()
+          if (current?.error) authError = current.error
+          token = sessionTokenFrom(current)
+        } catch (e) { authError = e }
+        if (!token && attempt < 5) await new Promise(resolve => setTimeout(resolve, 350 + 200 * attempt))
       }
-      if (!token) throw new Error('Signed in, but no secure session token was returned. Please try again.')
-      setLoginStatus('Starting your Author Scout workspace…')
-      await waitForBackend()
-      const d=await request('/api/v1/auth/neon-session','',{
-        method:'POST',
-        body:JSON.stringify({ session_token: token })
-      })
-      if(epoch!==authEpoch.current)return null
-      localStorage.setItem('authorScoutSession',d.session)
-      setKeyValue(d.session)
-      const s=await request('/api/v1/session',d.session)
-      if(epoch!==authEpoch.current)return null
+      if (!token) throw new Error(authError?.message ||
+        'Google/Neon sign-in succeeded but the browser did not return a session token. Please allow site data for this preview and try again.')
+      setLoginStatus('Connecting to Letter Desk…')
+      await waitForBackend(150000, setLoginStatus)
+      if(epoch !== authEpoch.current) return null
+      let data
+      try {
+        data = await requestWithRetry('/api/v1/auth/neon-session','', {
+          method:'POST',
+          body:JSON.stringify({ session_token: token })
+        }, 3)
+      } catch (e) {
+        if (e?.status === 401) {
+          // Refresh only once after a stale login result. Never retry bad credentials.
+          const current = await authClient.getSession()
+          const fresh = sessionTokenFrom(current)
+          if (!fresh || fresh === token) throw new Error('Your sign-in session could not be verified. Please sign out and sign in again.')
+          data = await request('/api/v1/auth/neon-session','',{
+            method:'POST', body:JSON.stringify({ session_token: fresh })
+          })
+        } else throw e
+      }
+      if(epoch !== authEpoch.current) return null
+      if (!data?.session) throw new Error('The server did not return a Letter Desk session.')
+      // Do not store a half-complete app session before verification succeeds.
+      setLoginStatus('Opening your service workspaces…')
+      const s=await requestWithRetry('/api/v1/session', data.session, {}, 3)
+      if(epoch !== authEpoch.current) return null
+      localStorage.setItem('authorScoutSession',data.session)
+      localStorage.setItem('authorScoutSessionInfo',JSON.stringify({key:data.session,session:s}))
+      setKeyValue(data.session)
       setSession(s)
-      localStorage.setItem('authorScoutSessionInfo',JSON.stringify({key:d.session,session:s}))
+      if (ENABLE_LETTERDESK_V2) setTab('services')
       setLoginStatus('')
       return s
     } catch(e) {
-      setLoginError(e?.message || 'Could not open your workspace.')
-      setLoginStatus('')
+      if (epoch === authEpoch.current) {
+        setLoginError(e?.message || 'Could not open your Letter Desk workspace.')
+        setLoginStatus('')
+      }
       throw e
-    } finally {
-      setChecking(false)
-    }
+    } finally { if (epoch === authEpoch.current) setChecking(false) }
   }, [])
-
   const startEmailAuth = useCallback(async (mode, form) => {
     setChecking(true)
     setLoginError('')
@@ -1242,6 +1306,32 @@ function AppCore() {
     try {
       const email=String(form.email || '').trim().toLowerCase()
       const password=String(form.password || '')
+      if (ENABLE_LETTERDESK_V2) {
+        // The staging BFF returns an application session directly, avoiding
+        // cross-site Neon Auth cookies blocked by many mobile browsers.
+        await waitForBackend(150000, setLoginStatus)
+        setLoginStatus('Verifying your credentials…')
+        const result=await requestWithRetry('/api/v2/letterdesk/auth/email', '', {
+          method:'POST',
+          body:JSON.stringify({mode, email, password, name:String(form.name || '').trim()})
+        }, 2)
+        if (!result?.session) throw new Error('Login succeeded but the preview did not return a session.')
+        setLoginStatus('Opening your service workspaces…')
+        const sessionInfo=await requestWithRetry('/api/v1/session', result.session, {}, 3)
+        localStorage.setItem('authorScoutSession', result.session)
+        localStorage.setItem('authorScoutSessionInfo', JSON.stringify({key:result.session,session:sessionInfo}))
+        setKeyValue(result.session)
+        setSession(sessionInfo)
+        setTab('services')
+        const params=new URLSearchParams(window.location.search)
+        if(params.has('signin')){
+          params.delete('signin')
+          window.history.replaceState({},document.title,withoutSigninHint(window.location.href))
+        }
+        setLoginError('')
+        setLoginStatus('')
+        return
+      }
       const result=mode === 'signup'
         ? await authClient.signUp.email({ email, password, name:String(form.name || '').trim() || email.split('@')[0] })
         : await authClient.signIn.email({ email, password })
@@ -1250,6 +1340,7 @@ function AppCore() {
     } catch(e) {
       setLoginError(e?.message || 'Authentication failed.')
       setLoginStatus('')
+    } finally {
       setChecking(false)
     }
   }, [exchangeManagedAuth])
@@ -1305,13 +1396,9 @@ function AppCore() {
     const epoch=authEpoch.current
     const boot=async () => {
       const params=new URLSearchParams(window.location.search)
-      // Recovery pages must not race automatic restoration of an old session.
-      if (window.location.pathname === '/reset-password' || params.has('token') || params.has('error') || params.get('signin') === '1') {
-        if (params.get('signin') === '1') {
-          localStorage.removeItem('authorScoutSession')
-    localStorage.removeItem('authorScoutSessionInfo')
-          setKeyValue('')
-        }
+      // ?signin=1 is a login link, never a sign-out instruction.
+      // Restoring a saved session must work after reload on that URL.
+      if (isPasswordRecovery(window.location.href)) {
         setChecking(false)
         return
       }
@@ -1334,7 +1421,7 @@ function AppCore() {
       }
 
       const saved=localStorage.getItem('authorScoutSession') || ''
-      if(!cancelled&&saved&&await verify(saved))return
+      if(!cancelled&&shouldTryStoredSession(window.location.href,saved)&&await verify(saved))return
 
       // Email/password login may leave a valid managed Neon Auth session.
       // Prefer that fresh identity before any stale Author Scout local session.
@@ -1394,7 +1481,7 @@ function AppCore() {
     <div className="app-frame">
       <div className="app-shell">
         <header className="topbar">
-          <button className="logo-pill" onClick={() => setTab('dashboard')}>Author Scout</button>
+          <button className="logo-pill" onClick={() => setTab(ENABLE_LETTERDESK_V2 ? 'services' : 'dashboard')}>{ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'}</button>
 
           <nav className="topnav" aria-label="Primary navigation">
             {NAV.map(([id,label]) => (
@@ -1407,7 +1494,7 @@ function AppCore() {
           <div className="top-actions">
             <div className="workspace-summary">
               <span>{displayName}</span>
-              <small>Author Scout</small>
+              <small>{ENABLE_LETTERDESK_V2 ? 'Letter Desk' : 'Author Scout'}</small>
             </div>
             <button className="avatar-button" onClick={logout} title="Sign out">{initials}</button>
           </div>
@@ -1421,21 +1508,24 @@ function AppCore() {
         </div>
 
         <main>
-          <div className={tab === 'dashboard' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'dashboard'}>
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'dashboard' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'dashboard'}>
             <Dashboard keyValue={keyValue} session={session} active={tab === 'dashboard'} />
-          </div>
-          <div className={tab === 'research' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'research'}>
+          </div>}
+          {ENABLE_LETTERDESK_V2 && <div className={tab === 'services' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'services'}>
+            <ServiceDashboard active={tab === 'services'} keyValue={keyValue} request={request} />
+          </div>}
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'research' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'research'}>
             <Research keyValue={keyValue} active={tab === 'research'} />
-          </div>
-          <div className={tab === 'authors' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'authors'}>
+          </div>}
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'authors' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'authors'}>
             <Authors keyValue={keyValue} active={tab === 'authors'} />
-          </div>
-          <div className={tab === 'messages' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'messages'}>
+          </div>}
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'messages' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'messages'}>
             <Letterdesk keyValue={keyValue} active={tab === 'messages'} request={request} apiBase={API_BASE} displayName={session?.account?.display_name || ''} />
-          </div>
-          <div className={tab === 'connections' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'connections'}>
+          </div>}
+          {!ENABLE_LETTERDESK_V2 && <div className={tab === 'connections' ? 'page-view active' : 'page-view'} aria-hidden={tab !== 'connections'}>
             <Connections keyValue={keyValue} active={tab === 'connections'} />
-          </div>
+          </div>}
         </main>
       </div>
     </div>
