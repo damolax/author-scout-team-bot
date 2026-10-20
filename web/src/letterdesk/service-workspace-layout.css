@@ -1,0 +1,42 @@
+.ld2.ld2-shell{max-width:none;margin:0;padding:0;display:grid;grid-template-columns:228px minmax(0,1fr);min-height:calc(100vh - 130px);background:#f8faf8}
+.ld2.ld2-collapsed{grid-template-columns:68px minmax(0,1fr)}
+.ld2-rail{position:sticky;top:0;align-self:start;height:calc(100vh - 16px);overflow-y:auto;background:white;border-right:1px solid #e1e9e2;padding:18px 12px;display:flex;flex-direction:column;gap:19px;z-index:10}
+.ld2-rail-brand{display:flex;align-items:center;gap:9px;padding:4px 7px;color:#163d2d;font-size:14px}
+.ld2-brand-mark{display:grid;place-items:center;background:#186b46;color:white;border-radius:9px;width:32px;height:32px;flex-shrink:0;font-size:12px}
+.ld2-rail-collapse{margin-left:auto;border:1px solid #dce8de;border-radius:7px;background:#fff;cursor:pointer;min-width:28px;height:28px;color:#28583d}
+.ld2-service-select{display:flex;flex-direction:column;gap:6px;min-width:0}
+.ld2-service-select span{font-size:9px;letter-spacing:.13em;color:#849b8b;font-weight:800;padding-left:8px}
+.ld2-service-select select{border:1px solid #d9e7dc;border-radius:9px;width:100%;background:#f6faf7;padding:11px 7px;color:#244b34;font-size:11px;font-weight:650}
+.ld2-rail-links{display:flex;flex-direction:column;gap:4px}
+.ld2-rail-item{background:transparent;border:0;border-radius:9px;padding:11px;display:flex;align-items:center;gap:12px;text-align:left;font:650 12px inherit;color:#667e6d;cursor:pointer;white-space:nowrap}
+.ld2-rail-item:hover,.ld2-rail-item.active{background:#eaf4ec;color:#18643e}
+.ld2-rail-item.active{box-shadow:inset 3px 0 #25764d}
+.ld2-rail-icon{width:22px;text-align:center;font-size:18px}
+.ld2-rail-bottom{margin-top:auto;font-size:10px;color:#90a094;padding:12px 8px;border-top:1px solid #e9f1ea}
+.ld2-content{padding:clamp(17px,2.6vw,40px);min-width:0;max-width:100%;overflow:hidden}
+.ld2-page-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;margin-bottom:23px}
+.ld2-page-header h1{color:#183e2c;font-size:clamp(24px,2.8vw,36px);letter-spacing:-.035em;line-height:1.2;margin:0 0 7px}
+.ld2-page-header p:last-child{font-size:12px;color:#788a7d;line-height:1.5;margin:0}
+.ld2-page-actions{display:flex;gap:8px;flex-wrap:wrap}
+.ld2-page-actions button{background:#fff;border:1px solid #d9e7dd;color:#226742;border-radius:9px;padding:10px 12px;font-size:11px;font-weight:700;cursor:pointer}
+.ld2-page-actions .ld2-button{background:#196946;color:white}
+.ld2-home-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;margin-bottom:22px}
+.ld2-home-actions button{background:#fff;border:1px solid #e0eae2;color:#235639;text-align:left;padding:18px;border-radius:13px;cursor:pointer}
+.ld2-home-actions b,.ld2-home-actions small{display:block}
+.ld2-home-actions b{font-size:13px;margin-bottom:7px}.ld2-home-actions small{font-size:11px;line-height:1.45;color:#829486}
+.ld2-profile-action{border:1px solid #cfe5d6;border-radius:8px;background:#f0faf2;padding:9px 12px;font-size:11px;font-weight:750;color:#197044;cursor:pointer;white-space:nowrap}
+.ld2-analytics-note{padding:20px;background:white;border:1px solid #e1e9e2;border-radius:12px;font-size:12px;color:#6f8274}
+.ld2-collapsed .ld2-rail-item{justify-content:center}.ld2-collapsed .ld2-rail-brand{padding:0;flex-wrap:wrap;justify-content:center}
+.ld2-collapsed .ld2-rail-collapse{margin:auto}.ld2-collapsed .ld2-service-select select{font-size:9px}
+.ld2-mobile-menu{display:none}
+@media(max-width:850px){
+.ld2.ld2-shell,.ld2.ld2-collapsed{display:block}
+.ld2-mobile-menu{display:flex;width:100%;position:sticky;top:0;z-index:15;background:#fff;border:0;border-bottom:1px solid #d8e7da;gap:12px;align-items:center;padding:15px;color:#225339;font-size:12px;font-weight:700;cursor:pointer}
+.ld2-rail{display:none}
+.ld2-mobile-rail .ld2-rail{display:flex;position:fixed;top:0;left:0;bottom:0;height:100vh;width:min(290px,85vw);z-index:30;box-shadow:8px 0 20px #173d3222}
+.ld2-rail-backdrop{position:fixed;inset:0;z-index:20;border:0;background:#172e1f6d}
+.ld2-page-header{flex-direction:column;align-items:stretch}
+.ld2-home-actions{grid-template-columns:1fr}
+.ld2-content{padding:17px}
+}
+@media(max-width:550px){.ld2-content{padding:12px}.ld2-page-header h1{font-size:25px}}
