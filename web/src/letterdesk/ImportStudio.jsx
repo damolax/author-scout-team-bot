@@ -111,7 +111,9 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported ,sta
         '/prospects/'+row.existing_opportunity_id+'/review-field',{
           method:'POST',headers:{'X-Author-Scout-Key':keyValue,'Content-Type':'application/json'},
           body:JSON.stringify({field:diff.field,previous:diff.previous||'',
-             incoming:diff.incoming,decision,source_sha256:preview.file_sha256,row:row.row})
+             incoming:diff.incoming,decision,source_sha256:preview.file_sha256,row:row.row,
+             filename:preview.filename,rows_total:preview.summary.rows_total,
+             preview_token:preview.preview_token})
         })
       const result=await response.json().catch(()=>({}))
       if(!response.ok)throw new Error(result.detail||'Could not record field decision')
