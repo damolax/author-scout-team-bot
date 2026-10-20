@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { SERVICE_MODES } from './service-modes.js'
 import './service-dashboard.css'
+import './service-workspace-layout.css'
 import ScoutingStudio from './ScoutingStudio.jsx'
 import ImportStudio from './ImportStudio.jsx'
 import FlowStudio from './FlowStudio.jsx'
