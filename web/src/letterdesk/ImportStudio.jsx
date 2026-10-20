@@ -176,7 +176,7 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported ,sta
           <small>{(preview.branch_columns||[]).length} message-branch columns recognized</small></div>
         <div className="ld-import-metrics">
           {[
-            ['New contacts',s.created],['Existing / linked',s.linked],
+            ['New contacts',s.created],['Existing / linked',s.linked],['Exact duplicates skipped',s.exact_duplicate],['Changes requiring review',s.review_required],
             ['Suppressed',s.suppressed],['Invalid rows',s.invalid],
             ['Excluded old statuses',s.skipped_duplicate],['Possible review drafts',s.first_message_drafts],
           ].map(([label,count])=><div key={label}><strong>{count||0}</strong><span>{label}</span></div>)}
@@ -189,6 +189,26 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported ,sta
             <td>{x.first_message?'Draft · ':''}{(x.branches||[]).length} branches</td>
           </tr>)}</tbody></table>
         </div>
+        {!!s.review_required&&<div className="ld-import-conflict-center">
+          <h4>Information differences need your decision</h4>
+          <p>{s.review_required} existing record(s) contain information that differs from this file.
+             No existing details, message histories, or prior drafts have been overwritten.
+             Review the differences below. The default is always to keep the previous record.</p>
+          {(preview.sample||[]).filter(row=>row.disposition==='review_required').map(row=>
+            <details key={row.row} className="ld-import-conflict">
+              <summary>{row.name||row.email} · {row.differences?.length||0} field changes</summary>
+              <div className="ld-import-diff-list">
+                {(row.differences||[]).map((d,i)=><div key={i} className="ld-import-diff">
+                  <strong>{d.field.replaceAll('_',' ').replaceAll('.',' / ')} · {d.change}</strong>
+                  <div><section><small>Existing</small><p>{d.previous||'Not recorded'}</p></section>
+                    <section><small>New upload</small><p>{d.incoming}</p></section></div>
+                </div>)}
+              </div>
+              <p>Held for review. Choose Keep existing for now; update acceptance will require an authenticated, audited decision.</p>
+            </details>)}
+          {s.review_required>25&&<p className="ld-import-footnote">Only the first 25 sample rows are shown. Other changes are held, never automatically merged.</p>}
+        </div>}
+        {s.exact_duplicate>0&&<p className="ld-import-footnote">{s.exact_duplicate} exact matching record(s) were automatically skipped; no duplicate author was created.</p>}
         {s.rows_total>25&&<p className="ld-import-footnote">Displaying 25 sample rows; all {s.rows_total} were validated.</p>}
         {preview.write_enabled
           ? <button className="ld-import-confirm" type="button" disabled={Boolean(busy)||!(s.created+s.linked+s.suppressed)}
