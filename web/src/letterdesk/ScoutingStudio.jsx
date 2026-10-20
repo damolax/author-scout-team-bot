@@ -3,7 +3,7 @@ import './scouting-studio.css'
 
 const DEFAULT_NICHES={author:'emerging fiction authors',automation:'professional service businesses','website-design':'local service businesses','digital-planner':'digital planner creators',shopify:'independent ecommerce brands','google-maps':'local businesses'}
 
-export default function ScoutingStudio({serviceKey,keyValue,request,active}) {
+export default function ScoutingStudio({serviceKey,keyValue,request,active ,standalone=false}) {
   const [niche,setNiche]=useState(DEFAULT_NICHES[serviceKey]||'')
   const [city,setCity]=useState('')
   const [country,setCountry]=useState('')
@@ -12,7 +12,7 @@ export default function ScoutingStudio({serviceKey,keyValue,request,active}) {
   const [plan,setPlan]=useState([])
   const [observables,setObservables]=useState([])
   const [jobs,setJobs]=useState([])
-  const [open,setOpen]=useState(false)
+  const [open,setOpen]=useState(standalone)
   const [busy,setBusy]=useState('')
   const [message,setMessage]=useState('')
   const [error,setError]=useState('')
