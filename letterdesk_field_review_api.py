@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter,HTTPException,Request
 from sqlalchemy import text
 from letterdesk_import_diff import norm_value
+from letterdesk_import_plan import verify_token
 
 LEAD_FIELDS={"name","website","maps_url","country","city","source_url"}
 DRAFT_FIELDS={"subject","first_message","first_message_english"}
@@ -43,7 +44,15 @@ def install_field_review_api(app,engine,authenticate):
         if team<1 or account<1:raise HTTPException(403,"Signed-in team account required")
         if os.getenv("LETTERDESK_IMPORT_WRITE_ENABLED","false").lower() not in ("1","yes","true"):
             raise HTTPException(403,"Import changes are disabled in protected staging")
-        field,decision,old,new,sha,row=normalize_decision(await request.json())
+        body=await request.json()
+        field,decision,old,new,sha,row=normalize_decision(body)
+        try:rows_total=int(body.get("rows_total") or 0)
+        except (ValueError,TypeError):raise HTTPException(400,"Invalid reviewed upload totals")
+        filename=str(body.get("filename") or "")
+        if not filename or rows_total<1 or rows_total>5000 or row>rows_total+21:
+            raise HTTPException(400,"This review requires a valid standard import preview")
+        verify_token(os.getenv("LETTERDESK_IMPORT_SIGNING_SECRET") or os.getenv("APP_SECRET",""),
+            str(body.get("preview_token") or ""),team,service,sha,filename,rows_total)
         with engine.begin() as db:
             db.execute(text("SELECT pg_advisory_xact_lock(:team)"),{"team":team})
             found=db.execute(text("""SELECT l.id AS lead_id,l.name,l.website,l.maps_url,
