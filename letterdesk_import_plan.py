@@ -27,7 +27,8 @@ def plan(engine,team,service,parsed):
     suppressed=set()
     with engine.connect() as db:
         if keys or emails:
-            found=db.execute(text("""SELECT l.dedupe_key,lower(l.email) AS email,
+            found=db.execute(text("""SELECT l.dedupe_key,CAST(l.id AS TEXT) AS lead_id,
+                      CAST(o.id AS TEXT) AS opportunity_id,lower(l.email) AS email,
                       l.name,l.website,l.maps_url,l.country,l.city,l.source_url,l.details,
                       o.evidence_summary,o.service_details,
                       draft.subject,draft.body AS first_message,
@@ -87,6 +88,7 @@ def plan(engine,team,service,parsed):
         obj["identity_key"]=key
         obj["disposition"]=status
         obj["differences"]=changes["differences"] if changes else []
+        obj["existing_opportunity_id"]=known.get("opportunity_id") if known else None
         obj["reason"]="; ".join(row["errors"]) if row["errors"] else (
           "Already suppressed" if row["email"] in suppressed and row["email"] else
           "Exact existing record; skipped automatically" if status=="exact_duplicate" else
@@ -120,5 +122,5 @@ def verify_token(secret,token,team,service,sha,filename,rows):
         raise HTTPException(400,"The file changed. Please preview it again.")
 
 def preview_row(row):
-    return {x:row.get(x) for x in ("row","name","email","website","source_url","disposition","reason","differences")} | {
+    return {x:row.get(x) for x in ("row","name","email","website","source_url","disposition","reason","differences","existing_opportunity_id")} | {
        "first_message":bool(row.get("first_message")),"branches":list(row.get("branches",{}).keys())}
