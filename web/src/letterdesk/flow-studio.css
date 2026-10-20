@@ -67,3 +67,16 @@
 .ld-flow-notice{color:#267149}
 @media(max-width:1040px){.ld-flow-editor{grid-template-columns:1fr}.ld-flow-summary>span{margin:0}}
 @media(max-width:620px){.ld-flow-heading{padding:18px;align-items:flex-start;flex-direction:column}.ld-flow-main{padding:15px}.ld-flow-identity{flex-direction:column}.ld-flow-identity>label{width:100%;min-width:0}.ld-flow-toolbar-buttons button{flex:1}.ld-flow-summary{gap:10px}.ld-flow-summary>label{max-width:none;min-width:110px}.ld-flow-edit-panel{padding:13px}.ld-flow-edge{grid-template-columns:1fr}.ld-flow-add-edge{grid-template-columns:1fr}.ld-flow-simulator{flex-direction:column;align-items:stretch}}
+
+/* Focused full-screen workflow editor: viewport left, editing inspector right */
+.ld-flow-workbench{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,350px);gap:15px;align-items:start}
+.ld-flow-workbench .ld-flow-editor{display:flex;flex-direction:column;gap:13px;margin:0;max-height:min(78vh,930px);overflow-y:auto;position:sticky;top:16px;scrollbar-gutter:stable}
+.ld-flow-workbench .ld-flow-edit-panel{padding:15px}
+.ld-flow-workbench .ld-canvas-viewport{height:min(78vh,930px)}
+.ld-flow-workbench .ld-flow-edit-panel label{min-width:0}
+.ld-flow-workbench .ld-flow-edges{max-height:440px}
+.ld-flow-workbench .ld-flow-edge{grid-template-columns:1fr}
+.ld-flow-workbench .ld-flow-add-edge{grid-template-columns:1fr}
+.ld-flow-workbench .ld-flow-add-edge>strong{grid-column:1}
+@media(max-width:1160px){.ld-flow-workbench{grid-template-columns:minmax(0,1fr) minmax(270px,310px)}}
+@media(max-width:930px){.ld-flow-workbench{grid-template-columns:1fr}.ld-flow-workbench .ld-flow-editor{position:static;max-height:none;overflow:visible}.ld-flow-workbench .ld-canvas-viewport{height:520px}}
