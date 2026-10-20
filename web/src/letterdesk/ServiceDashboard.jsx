@@ -58,6 +58,7 @@ export default function ServiceDashboard({ active, keyValue, request }) {
   const [profileId, setProfileId] = useState('')
   const [visited, setVisited] = useState(['overview'])
   const [services, setServices] = useState([])
+  const [attention, setAttention] = useState([])
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
@@ -103,6 +104,15 @@ export default function ServiceDashboard({ active, keyValue, request }) {
     }, 160)
     return () => { cancelled = true; clearTimeout(timer) }
   }, [active, keyValue, request, serviceKey, search, offset, reload, screen])
+
+  useEffect(()=>{
+    if(!active||!keyValue||screen!=='overview')return
+    let cancelled=false
+    request('/api/v2/letterdesk/services/'+serviceKey+'/attention',keyValue)
+      .then(r=>{if(!cancelled)setAttention(r.items||[])})
+      .catch(()=>{if(!cancelled)setAttention([])})
+    return ()=>{cancelled=true}
+  },[active,keyValue,serviceKey,screen,reload,request])
 
   function chooseService(key) {
     if (serviceKey === key) return
@@ -189,6 +199,13 @@ export default function ServiceDashboard({ active, keyValue, request }) {
       </header>
       {screen==='overview'&&<>
         <div className="ld2-metrics" aria-label="Service snapshot">{metricsCards.map(([label,value])=><div className="ld2-metric" key={label}><span>{label}</span><strong>{loadingSummary?'…':fmt(value)}</strong></div>)}</div>
+        {attention.length>0&&<div className="ld2-attention">
+          <div><h3>Needs your attention</h3><small>Priority work in this service, based on recorded data</small></div>
+          <div className="ld2-attention-grid">{attention.map(item=>
+            <button key={item.code} type="button" onClick={()=>navigate(item.screen)}>
+              <strong>{fmt(item.count)}</strong><span>{item.label}</span><b>Review →</b>
+            </button>)}</div>
+        </div>}
         <div className="ld2-home-actions">
           <button onClick={()=>navigate('inbox')}><b>Review replies →</b><small>Respond to conversations that need attention</small></button>
           <button onClick={()=>navigate('imports')}><b>Import prospects →</b><small>Check new contacts, evidence and messages</small></button>
