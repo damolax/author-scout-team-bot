@@ -6,6 +6,7 @@ import ImportStudio from './ImportStudio.jsx'
 import FlowStudio from './FlowStudio.jsx'
 import CampaignStudio from './CampaignStudio.jsx'
 import ReplyStudio from './ReplyStudio.jsx'
+import ProspectProfile from './ProspectProfile.jsx'
 
 const SERVICE_ICONS = Object.freeze({
   author: '✦', automation: '⟲', 'website-design': '▣',
@@ -50,6 +51,10 @@ function exportTemplate(mode) {
 
 export default function ServiceDashboard({ active, keyValue, request }) {
   const [serviceKey, setServiceKey] = useState('author')
+  const [screen, setScreen] = useState('overview')
+  const [railOpen, setRailOpen] = useState(true)
+  const [mobileRail, setMobileRail] = useState(false)
+  const [profileId, setProfileId] = useState('')
   const [services, setServices] = useState([])
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
@@ -75,7 +80,7 @@ export default function ServiceDashboard({ active, keyValue, request }) {
   }, [active, keyValue, request, reload])
 
   useEffect(() => {
-    if (!active || !keyValue) return undefined
+    if (!active || !keyValue || !['prospects','overview'].includes(screen)) return undefined
     const serial = ++requestSerial.current
     let cancelled = false
     const timer = setTimeout(() => {
@@ -95,113 +100,108 @@ export default function ServiceDashboard({ active, keyValue, request }) {
         })
     }, 160)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [active, keyValue, request, serviceKey, search, offset, reload])
+  }, [active, keyValue, request, serviceKey, search, offset, reload, screen])
 
   function chooseService(key) {
     if (serviceKey === key) return
     setServiceKey(key)
+    setProfileId('')
+    setScreen('overview')
     setRows([])
     setSearch('')
     setOffset(0)
     setError('')
   }
 
-  return (
-    <section className="ld2">
-      <div className="ld2-hero">
-        <div>
-          <p className="ld2-eyebrow">LETTER DESK / INTELLIGENT SCOUTING</p>
-          <h1>One workspace.<br/><em>Six ways to discover opportunity.</em></h1>
-          <p>Switch your service without losing the context, evidence or conversations behind each prospect.</p>
-        </div>
-        <div className="ld2-hero-actions">
-          <span className="ld2-live"><i/> Connected to your workspace</span>
-          <button type="button" className="ld2-button ld2-button-outline" onClick={() => setReload(n => n + 1)} disabled={loading || loadingSummary}>
-            ↻ Refresh data
-          </button>
-        </div>
+  const nav = [
+    {key:'overview',name:'Overview',icon:'▦',desc:'Service snapshot and priorities'},
+    {key:'prospects',name:'Prospects',icon:'♙',desc:'Contacts, evidence and histories'},
+    {key:'research',name:'Scouting',icon:'⌕',desc:'Evidence-led prospect discovery'},
+    {key:'imports',name:'Imports',icon:'⇧',desc:'Bulk uploads and conflict review'},
+    {key:'flows',name:'Flow Builder',icon:'⑂',desc:'Visual conversation paths'},
+    {key:'campaigns',name:'Gmail & Campaigns',icon:'✉',desc:'Senders and reviewed outreach'},
+    {key:'inbox',name:'Reply Inbox',icon:'▤',desc:'Reply decisions and next actions'},
+    {key:'analytics',name:'Analytics',icon:'▥',desc:'Delivery and review metrics'},
+  ]
+  const chosen = nav.find(n=>n.key===screen) || nav[0]
+  function navigate(next) {
+    setScreen(next);setMobileRail(false);setProfileId('')
+  }
+  const metricsCards=[
+    ['Research leads',metrics?.prospect_count],['Drafts to review',metrics?.draft_count],
+    ['Sent messages',metrics?.sent_count],['Awaiting replies',metrics?.awaiting_reply_count],
+  ]
+  const leadsTable = <div className="ld2-leads-panel">
+    <div className="ld2-list-header">
+      <div><h3>Prospects and research</h3><p>{fmt(total)} opportunities in this service</p></div>
+      <label className="ld2-search"><span aria-hidden="true">⌕</span>
+        <input type="search" aria-label="Search this service's leads" placeholder="Search name, website or email"
+          value={search} onChange={e=>{setSearch(e.target.value);setOffset(0)}}/>
+      </label>
+    </div>
+    {error&&<p className="ld2-error" role="alert">{error}</p>}
+    <div className="ld2-table-wrap"><table className="ld2-table">
+      <thead><tr><th>Prospect</th><th>Email</th><th>Research status</th><th>Evidence</th><th>Profile</th></tr></thead>
+      <tbody>{loading?<tr><td colSpan={5} className="ld2-empty">Loading workspace data…</td></tr>:
+        rows.length===0?<tr><td colSpan={5} className="ld2-empty">No matching prospects. Try Imports or Scouting to add contacts.</td></tr>:
+        rows.map(lead=><tr key={lead.opportunity_id}>
+          <td><strong>{lead.name}</strong><small>{[lead.city,lead.country].filter(Boolean).join(' · ')||current.noun}</small></td>
+          <td>{lead.email||<span className="ld2-muted">Not verified</span>}</td>
+          <td><span className={'ld2-status '+(lead.status==='research_complete'?'is-ready':'')}>{String(lead.status||'new').replaceAll('_',' ')}</span></td>
+          <td>{safeLink(lead.source_url||lead.website)?<a href={safeLink(lead.source_url||lead.website)} target="_blank" rel="noopener noreferrer">View source ↗</a>:<span className="ld2-muted">No source</span>}</td>
+          <td><button type="button" className="ld2-profile-action" onClick={()=>setProfileId(lead.opportunity_id)}>Open profile →</button></td>
+        </tr>)}
+      </tbody>
+    </table></div>
+    <div className="ld2-pagination"><span>{total?fmt(offset+1)+'–'+fmt(Math.min(total,offset+rows.length))+' of '+fmt(total):'No records'}</span>
+      <div><button disabled={loading||offset===0} onClick={()=>setOffset(v=>Math.max(0,v-25))}>← Previous</button>
+        <button disabled={loading||offset+25>=total} onClick={()=>setOffset(v=>v+25)}>Next →</button></div>
+    </div>
+  </div>
+  return <section className={'ld2 ld2-shell '+(!railOpen?'ld2-collapsed ':'')+(mobileRail?'ld2-mobile-rail':'')}>
+    <button type="button" className="ld2-mobile-menu" aria-label="Toggle workspace menu" aria-expanded={mobileRail} onClick={()=>setMobileRail(v=>!v)}>☰ <span>{current.label.replace(' Scouting','')} / {chosen.name}</span></button>
+    {mobileRail&&<button className="ld2-rail-backdrop" type="button" aria-label="Close menu" onClick={()=>setMobileRail(false)}/>}
+    <aside className="ld2-rail" aria-label="Service and tool navigation">
+      <div className="ld2-rail-brand"><span className="ld2-brand-mark">LD</span>{railOpen&&<strong>Letter Desk</strong>}
+        <button className="ld2-rail-collapse" type="button" aria-label={railOpen?'Collapse sidebar':'Expand sidebar'} onClick={()=>setRailOpen(v=>!v)}>{railOpen?'‹':'›'}</button>
       </div>
-
-      <div className="ld2-mode-grid" role="group" aria-label="Choose the scouting service">
-        {SERVICE_MODES.map(mode => (
-          <button type="button" key={mode.key} className={'ld2-mode ' + (mode.key === serviceKey ? 'is-active' : '')}
-            aria-pressed={mode.key === serviceKey} onClick={() => chooseService(mode.key)}>
-            <span className="ld2-mode-icon" aria-hidden="true">{SERVICE_ICONS[mode.key]}</span>
-            <strong>{mode.label.replace(' Scouting', '')}</strong>
-            <span>{mode.noun} research</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="ld2-current-header">
-        <div>
-          <p className="ld2-eyebrow">ACTIVE SERVICE</p>
-          <h2>{HEADLINES[serviceKey]}</h2>
-          <p>{SERVICE_DESCRIPTIONS[serviceKey]}</p>
+      <label className="ld2-service-select">{railOpen&&<span>ACTIVE SERVICE</span>}
+        <select aria-label="Select service" value={serviceKey} onChange={e=>chooseService(e.target.value)}>
+          {SERVICE_MODES.map(m=><option key={m.key} value={m.key}>{m.label.replace(' Scouting','')}</option>)}
+        </select>
+      </label>
+      <nav className="ld2-rail-links">{nav.map(item=><button type="button" key={item.key}
+        className={'ld2-rail-item '+(screen===item.key?'active':'')} title={item.name}
+        aria-current={screen===item.key?'page':undefined} onClick={()=>navigate(item.key)}>
+        <span className="ld2-rail-icon" aria-hidden="true">{item.icon}</span>
+        {railOpen&&<span>{item.name}</span>}
+      </button>)}</nav>
+      <div className="ld2-rail-bottom">{railOpen?'Six services · one organized workspace':'✦'}</div>
+    </aside>
+    <main className="ld2-content">
+      <header className="ld2-page-header">
+        <div><p className="ld2-eyebrow">{current.label.replace(' Scouting','').toUpperCase()} / {chosen.name.toUpperCase()}</p>
+          <h1>{screen==='overview'?HEADLINES[serviceKey]:chosen.name}</h1><p>{screen==='overview'?SERVICE_DESCRIPTIONS[serviceKey]:chosen.desc}</p></div>
+        <div className="ld2-page-actions"><button type="button" onClick={()=>setReload(v=>v+1)} disabled={loadingSummary}>↻ Refresh</button>
+          {screen==='imports'&&<button type="button" className="ld2-button" onClick={()=>exportTemplate(current)}>↓ Import template</button>}</div>
+      </header>
+      {screen==='overview'&&<>
+        <div className="ld2-metrics" aria-label="Service snapshot">{metricsCards.map(([label,value])=><div className="ld2-metric" key={label}><span>{label}</span><strong>{loadingSummary?'…':fmt(value)}</strong></div>)}</div>
+        <div className="ld2-home-actions">
+          <button onClick={()=>navigate('inbox')}><b>Review replies →</b><small>Respond to conversations that need attention</small></button>
+          <button onClick={()=>navigate('imports')}><b>Import prospects →</b><small>Check new contacts, evidence and messages</small></button>
+          <button onClick={()=>navigate('flows')}><b>Design a flow →</b><small>Build and simulate response paths</small></button>
         </div>
-        <button type="button" className="ld2-button" onClick={() => exportTemplate(current)}>
-          ↓ Download {current.noun} import template
-        </button>
-      </div>
-
-      <ScoutingStudio key={serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
-      <ImportStudio key={'import-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} active={active} onImported={()=>setReload(n=>n+1)} />
-      <FlowStudio key={'flow-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
-      <CampaignStudio key={'campaign-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
-      <ReplyStudio key={'reply-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} />
-
-      <div className="ld2-metrics" aria-label="Service performance">
-        {[
-          ['Research leads',metrics?.prospect_count],
-          ['Drafts to review',metrics?.draft_count],
-          ['Sent messages',metrics?.sent_count],
-          ['Awaiting replies',metrics?.awaiting_reply_count],
-        ].map(([label,value]) => <div className="ld2-metric" key={label}>
-          <span>{label}</span>
-          <strong>{loadingSummary ? '…' : fmt(value)}</strong>
-        </div>)}
-      </div>
-
-      <div className="ld2-leads-panel">
-        <div className="ld2-list-header">
-          <div>
-            <h3>Prospect research</h3>
-            <p>{fmt(total)} opportunities in this service</p>
-          </div>
-          <label className="ld2-search">
-            <span aria-hidden="true">⌕</span>
-            <input type="search" aria-label="Search this service's leads" placeholder="Search name, website or email"
-              value={search} onChange={e => { setSearch(e.target.value); setOffset(0) }}/>
-          </label>
-        </div>
-        {error && <p className="ld2-error" role="alert">{error} Make sure the Neon service endpoints are enabled in staging.</p>}
-        <div className="ld2-table-wrap">
-          <table className="ld2-table">
-            <thead><tr><th>Prospect</th><th>Email</th><th>Research status</th><th>Source</th></tr></thead>
-            <tbody>
-              {loading
-                ? <tr><td colSpan={4} className="ld2-empty">Loading verified workspace data…</td></tr>
-                : rows.length === 0
-                ? <tr><td colSpan={4} className="ld2-empty">No prospects found for this service yet. Open the import panel or Scouting Studio to add prospects.</td></tr>
-                : rows.map(lead => <tr key={lead.opportunity_id}>
-                  <td><strong>{lead.name}</strong><small>{[lead.city, lead.country].filter(Boolean).join(' · ') || current.noun}</small></td>
-                  <td>{lead.email || <span className="ld2-muted">Not found</span>}</td>
-                  <td><span className={'ld2-status ' + (lead.status === 'research_complete' ? 'is-ready' : '')}>{String(lead.status || 'new').replaceAll('_',' ')}</span></td>
-                  <td>{safeLink(lead.source_url || lead.website)
-                    ? <a href={safeLink(lead.source_url || lead.website)} target="_blank" rel="noopener noreferrer">View evidence ↗</a>
-                    : <span className="ld2-muted">No source</span>}</td>
-                </tr>)}
-            </tbody>
-          </table>
-        </div>
-        <div className="ld2-pagination">
-          <span>{total ? fmt(offset+1) + '–' + fmt(Math.min(total,offset+rows.length)) + ' of ' + fmt(total) : 'No records'}</span>
-          <div>
-            <button type="button" disabled={loading || offset === 0} onClick={() => setOffset(n=>Math.max(0,n-25))}>← Previous</button>
-            <button type="button" disabled={loading || offset + 25 >= total} onClick={() => setOffset(n=>n+25)}>Next →</button>
-          </div>
-        </div>
-      </div>
-    </section>
-  )
+        {leadsTable}
+      </>}
+      {screen==='prospects'&&leadsTable}
+      {screen==='research'&&<ScoutingStudio key={serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} standalone/>}
+      {screen==='imports'&&<ImportStudio key={'import-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} active={active} onImported={()=>setReload(n=>n+1)} standalone/>}
+      {screen==='flows'&&<FlowStudio key={'flow-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} standalone/>}
+      {screen==='campaigns'&&<CampaignStudio key={'campaign-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} standalone/>}
+      {screen==='inbox'&&<ReplyStudio key={'reply-'+serviceKey} serviceKey={serviceKey} keyValue={keyValue} request={request} active={active} standalone/>}
+      {screen==='analytics'&&<><div className="ld2-metrics">{metricsCards.map(([label,value])=><div className="ld2-metric" key={label}><span>{label}</span><strong>{fmt(value)}</strong></div>)}</div><p className="ld2-analytics-note">These figures come from your service's actual recorded opportunities and messages. Sending remains subject to account verification and campaign controls.</p></>}
+      {profileId&&<ProspectProfile serviceKey={serviceKey} opportunityId={profileId} keyValue={keyValue} request={request} onClose={()=>setProfileId('')}/>}
+    </main>
+  </section>
 }
