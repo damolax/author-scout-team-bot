@@ -14,3 +14,4 @@ CREATE TABLE IF NOT EXISTS public.ld_prospect_field_audit (
  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ld_prospect_field_audit_lookup ON public.ld_prospect_field_audit(team_id,lead_id,created_at DESC);
+ALTER TABLE public.ld_prospect_field_audit ADD COLUMN IF NOT EXISTS decision text NOT NULL DEFAULT 'accepted' CHECK(decision IN ('accepted','rejected'));
