@@ -27,7 +27,7 @@ async function transfer(path,key,method='GET',file=null,token=''){
   }finally{clearTimeout(timer)}
 }
 
-export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
+export default function ImportStudio({serviceKey,keyValue,active,onImported ,standalone=false}) {
   const fileRef=useRef(null)
   const [file,setFile]=useState(null)
   const [preview,setPreview]=useState(null)
@@ -35,7 +35,7 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
   const [busy,setBusy]=useState('')
   const [error,setError]=useState('')
   const [notice,setNotice]=useState('')
-  const [expanded,setExpanded]=useState(false)
+  const [expanded,setExpanded]=useState(standalone)
   const [undoPreview,setUndoPreview]=useState(null)
   const [undoFilename,setUndoFilename]=useState('')
 
@@ -140,7 +140,7 @@ export default function ImportStudio({serviceKey,keyValue,active,onImported}) {
   }
 
   const s=preview?.summary||{}
-  return <section className="ld-import-card" aria-label="Service import workspace">
+  return <section className= "ld-import-card" aria-label="Service import workspace">
     <div className="ld-import-top">
       <div><span className="ld-import-kicker">SERVICE DATABASE / BULK IMPORT</span>
         <h3>Import prospects and message paths</h3>
