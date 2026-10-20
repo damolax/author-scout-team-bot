@@ -13,8 +13,8 @@ function clientKey(){
   if(typeof crypto!=='undefined'&&crypto.randomUUID)return crypto.randomUUID()
   return 'reply-'+Date.now()+'-'+Math.random().toString(36).slice(2)
 }
-export default function ReplyStudio({serviceKey,keyValue,request,active}){
-  const [open,setOpen]=useState(false)
+export default function ReplyStudio({serviceKey,keyValue,request,active ,standalone=false}){
+  const [open,setOpen]=useState(standalone)
   const [conversations,setConversations]=useState([])
   const [inbox,setInbox]=useState([])
   const [flows,setFlows]=useState([])
@@ -55,7 +55,7 @@ export default function ReplyStudio({serviceKey,keyValue,request,active}){
     }catch(e){setError(e.message||'Reply workspace could not load')}
   }
   useEffect(()=>{
-    setOpen(false);setInbox([]);setConversations([]);setSync([]);setFlows([])
+    setOpen(standalone);setInbox([]);setConversations([]);setSync([]);setFlows([])
     setSelectedReply('');setReviewOutcome('uncertain');setConversation('')
     setSender('');setBody('');setSelectedFlow('');setLastReviewed(null)
     setSuggestion(null);setError('');setNotice('');setIdempotencyKey(clientKey())
@@ -129,7 +129,7 @@ export default function ReplyStudio({serviceKey,keyValue,request,active}){
     }catch(e){setError(e.message)}
     finally{setWorking('')}
   }
-  return <section className="ld-replies" aria-label="Reply intelligence and review">
+  return <section className= "ld-replies" aria-label="Reply intelligence and review">
     <div className="ld-replies-header">
       <div><span className="ld-replies-kicker">PHASE 7 / CONVERSATION SAFETY</span>
         <h3>Reply Inbox & Decisions</h3>
