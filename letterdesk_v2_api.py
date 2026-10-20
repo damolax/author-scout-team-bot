@@ -10,6 +10,7 @@ from typing import Callable
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from sqlalchemy import Engine, text
+from letterdesk_language import language_recommendation
 
 SERVICE_KEYS = (
     "author", "automation", "website-design",
@@ -154,12 +155,20 @@ def install_letterdesk_v2_routes(
             WHERE ir.opportunity_id=:id AND w.team_id=:team AND w.service_key=:service
             ORDER BY ir.created_at DESC LIMIT 100
         """,**params)
+        stored=(opp.get("service_details") or {})
+        nested=(lead.get("details") or {})
+        if isinstance(nested,dict):
+            nested=nested.get("details") or {}
+        else:nested={}
+        language=language_recommendation(lead.get("country"),
+            stored.get("preferred_language") or nested.get("preferred_language") or "",
+            stored.get("evidence_language") or nested.get("evidence_language") or "")
         suppressed=bool(first("""SELECT 1 AS blocked FROM public.ld_suppressions
             WHERE team_id=:team AND normalized_email=lower(:email) LIMIT 1""",
             team=team,email=opp.get("email") or "").get("blocked"))
         return {"ok":True,"lead":lead,"opportunity":{
             "id":opp["id"],"status":opp["status"],"evidence_summary":opp["evidence_summary"],
             "service_details":opp["service_details"],"fit_score":opp["fit_score"]},
-            "suppressed":suppressed,"evidence":evidence,"messages":messages,"imports":imports}
+            "suppressed":suppressed,"language":language,"evidence":evidence,"messages":messages,"imports":imports}
 
     app.include_router(router)
