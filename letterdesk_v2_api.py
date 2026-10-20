@@ -108,4 +108,58 @@ def install_letterdesk_v2_routes(
             "limit": limit, "offset": offset,
         }
 
+    @router.get("/services/{service_key}/leads/{opportunity_id}")
+    def prospect_profile(request: Request, service_key: str, opportunity_id: __import__("uuid").UUID):
+        """Private, one-contact read model: evidence, messages and import history."""
+        team=team_id_for(request)
+        if service_key not in SERVICE_KEYS:
+            raise HTTPException(404,"Unknown service")
+        params={"team":team,"service":service_key,"id":opportunity_id}
+        opp=first("""
+            SELECT CAST(o.id AS TEXT) AS id,o.status,o.evidence_summary,
+                   o.service_details,o.fit_score,
+                   CAST(o.created_at AS TEXT) AS created_at,
+                   CAST(l.id AS TEXT) AS lead_id,l.name,l.email,l.website,l.maps_url,
+                   l.kind,l.country,l.city,l.source_url,l.contact_verification,l.details
+            FROM public.ld_opportunities o
+            JOIN public.ld_service_workspaces w ON w.id=o.workspace_id
+            JOIN public.ld_leads l ON l.id=o.lead_id AND l.team_id=w.team_id
+            WHERE o.id=:id AND w.team_id=:team AND w.service_key=:service
+                AND w.is_active=true""",**params)
+        if not opp:raise HTTPException(404,"Prospect not found in your service")
+        lead={x:opp[x] for x in ("lead_id","name","email","website","maps_url","kind",
+                                 "country","city","source_url","contact_verification","details")}
+        evidence=rows("""
+            SELECT CAST(e.id AS TEXT) AS id,e.observation,e.source_url,e.confidence,
+                   CAST(e.collected_at AS TEXT) AS collected_at
+            FROM public.ld_evidence e WHERE e.opportunity_id=:id
+               OR (e.lead_id=CAST(:lead_id AS uuid) AND e.opportunity_id IS NULL)
+            ORDER BY e.collected_at DESC LIMIT 100
+        """,id=opportunity_id,lead_id=opp["lead_id"])
+        messages=rows("""
+            SELECT CAST(m.id AS TEXT) AS id,m.subject,m.body,m.body_english,
+                   m.status,m.sender_email,m.recipient_email,
+                   CAST(m.created_at AS TEXT) AS created_at,
+                   CAST(m.sent_at_original AS TEXT) AS sent_at
+            FROM public.ld_message_records m
+            JOIN public.ld_conversations c ON c.id=m.conversation_id
+            WHERE c.opportunity_id=:id ORDER BY m.created_at DESC LIMIT 100
+        """,id=opportunity_id)
+        imports=rows("""
+            SELECT CAST(ir.id AS TEXT) AS id,ir.row_number,ir.disposition,ir.reason,
+                   b.filename,CAST(ir.created_at AS TEXT) AS created_at
+            FROM public.ld_import_rows ir
+            JOIN public.ld_import_batches b ON b.id=ir.batch_id
+            JOIN public.ld_service_workspaces w ON w.id=b.workspace_id
+            WHERE ir.opportunity_id=:id AND w.team_id=:team AND w.service_key=:service
+            ORDER BY ir.created_at DESC LIMIT 100
+        """,**params)
+        suppressed=bool(first("""SELECT 1 AS blocked FROM public.ld_suppressions
+            WHERE team_id=:team AND normalized_email=lower(:email) LIMIT 1""",
+            team=team,email=opp.get("email") or "").get("blocked"))
+        return {"ok":True,"lead":lead,"opportunity":{
+            "id":opp["id"],"status":opp["status"],"evidence_summary":opp["evidence_summary"],
+            "service_details":opp["service_details"],"fit_score":opp["fit_score"]},
+            "suppressed":suppressed,"evidence":evidence,"messages":messages,"imports":imports}
+
     app.include_router(router)
