@@ -82,7 +82,7 @@ def install_import_api(app:FastAPI,engine,authenticate):
         rows,summary=plan(engine,team,service,parsed)
         sha=hashlib.sha256(data).hexdigest()
         secret=os.getenv("LETTERDESK_IMPORT_SIGNING_SECRET") or os.getenv("APP_SECRET","")
-        return {"ok":True,"filename":filename,"sheet":parsed["sheet"],"summary":summary,
+        return {"ok":True,"filename":filename,"file_sha256":sha,"sheet":parsed["sheet"],"summary":summary,
                 "columns":parsed["columns"],"branch_columns":parsed["branch_columns"],
                 "sample":[preview_row(r) for r in rows[:25]],
                 "preview_token":file_token(secret,team,service,sha,filename,len(rows)),
